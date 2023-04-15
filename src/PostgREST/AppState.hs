@@ -1,79 +1,91 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module PostgREST.AppState
-  ( AppState
-  , destroy
-  , flushPool
-  , getConfig
-  , getSchemaCache
-  , getIsListenerOn
-  , getMainThreadId
-  , getPgVersion
-  , getRetryNextIn
-  , getTime
-  , getWorkerSem
-  , init
-  , initWithPool
-  , logWithZTime
-  , logPgrstError
-  , putConfig
-  , putSchemaCache
-  , putIsListenerOn
-  , putPgVersion
-  , putRetryNextIn
-  , signalListener
-  , usePool
-  , waitListener
-  , debounceLogAcquisitionTimeout
-  ) where
+module PostgREST.AppState (
+  AppState,
+  destroy,
+  flushPool,
+  getConfig,
+  getSchemaCache,
+  getIsListenerOn,
+  getMainThreadId,
+  getPgVersion,
+  getRetryNextIn,
+  getTime,
+  getWorkerSem,
+  init,
+  initWithPool,
+  logWithZTime,
+  logPgrstError,
+  putConfig,
+  putSchemaCache,
+  putIsListenerOn,
+  putPgVersion,
+  putRetryNextIn,
+  signalListener,
+  usePool,
+  waitListener,
+  debounceLogAcquisitionTimeout,
+) where
 
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Text.Encoding   as T
-import qualified Hasql.Pool           as SQL
-import qualified Hasql.Session        as SQL
-import qualified PostgREST.Error      as Error
+import qualified Data.Text.Encoding as T
+import qualified Hasql.Pool as SQL
+import qualified Hasql.Session as SQL
+import qualified PostgREST.Error as Error
 
-import Control.AutoUpdate (defaultUpdateSettings, mkAutoUpdate,
-                           updateAction)
+import Control.AutoUpdate (
+  defaultUpdateSettings,
+  mkAutoUpdate,
+  updateAction,
+ )
 import Control.Debounce
-import Data.IORef         (IORef, atomicWriteIORef, newIORef,
-                           readIORef)
-import Data.Time          (ZonedTime, defaultTimeLocale, formatTime,
-                           getZonedTime)
-import Data.Time.Clock    (UTCTime, getCurrentTime)
+import Data.IORef (
+  IORef,
+  atomicWriteIORef,
+  newIORef,
+  readIORef,
+ )
+import Data.Time (
+  ZonedTime,
+  defaultTimeLocale,
+  formatTime,
+  getZonedTime,
+ )
+import Data.Time.Clock (UTCTime, getCurrentTime)
 
-import PostgREST.Config           (AppConfig (..))
+import PostgREST.Config (AppConfig (..))
 import PostgREST.Config.PgVersion (PgVersion (..), minimumPgVersion)
-import PostgREST.SchemaCache      (SchemaCache)
+import PostgREST.SchemaCache (SchemaCache)
 
+import qualified Hasql.Api.Eff.Session.Legacy as L
+import qualified Hasql.Api.Eff.Session.Run as R
 import Protolude
 
-
 data AppState = AppState
-  -- | Database connection pool
-  { statePool                     :: SQL.Pool
-  -- | Database server version, will be updated by the connectionWorker
-  , statePgVersion                :: IORef PgVersion
-  -- | No schema cache at the start. Will be filled in by the connectionWorker
-  , stateSchemaCache              :: IORef (Maybe SchemaCache)
-  -- | Binary semaphore to make sure just one connectionWorker can run at a time
-  , stateWorkerSem                :: MVar ()
-  -- | Binary semaphore used to sync the listener(NOTIFY reload) with the connectionWorker.
-  , stateListener                 :: MVar ()
-  -- | State of the LISTEN channel, used for the admin server checks
-  , stateIsListenerOn             :: IORef Bool
-  -- | Config that can change at runtime
-  , stateConf                     :: IORef AppConfig
-  -- | Time used for verifying JWT expiration
-  , stateGetTime                  :: IO UTCTime
-  -- | Time with time zone used for worker logs
-  , stateGetZTime                 :: IO ZonedTime
-  -- | Used for killing the main thread in case a subthread fails
-  , stateMainThreadId             :: ThreadId
-  -- | Keeps track of when the next retry for connecting to database is scheduled
-  , stateRetryNextIn              :: IORef Int
-  -- | Logs a pool error with a debounce
+  { statePool :: SQL.Pool
+  -- ^ Database connection pool
+  , statePgVersion :: IORef PgVersion
+  -- ^ Database server version, will be updated by the connectionWorker
+  , stateSchemaCache :: IORef (Maybe SchemaCache)
+  -- ^ No schema cache at the start. Will be filled in by the connectionWorker
+  , stateWorkerSem :: MVar ()
+  -- ^ Binary semaphore to make sure just one connectionWorker can run at a time
+  , stateListener :: MVar ()
+  -- ^ Binary semaphore used to sync the listener(NOTIFY reload) with the connectionWorker.
+  , stateIsListenerOn :: IORef Bool
+  -- ^ State of the LISTEN channel, used for the admin server checks
+  , stateConf :: IORef AppConfig
+  -- ^ Config that can change at runtime
+  , stateGetTime :: IO UTCTime
+  -- ^ Time used for verifying JWT expiration
+  , stateGetZTime :: IO ZonedTime
+  -- ^ Time with time zone used for worker logs
+  , stateMainThreadId :: ThreadId
+  -- ^ Used for killing the main thread in case a subthread fails
+  , stateRetryNextIn :: IORef Int
+  -- ^ Keeps track of when the next retry for connecting to database is scheduled
   , debounceLogAcquisitionTimeout :: IO ()
+  -- ^ Logs a pool error with a debounce
   }
 
 init :: AppConfig -> IO AppState
@@ -83,28 +95,30 @@ init conf = do
 
 initWithPool :: SQL.Pool -> AppConfig -> IO AppState
 initWithPool pool conf = do
-  appState <- AppState pool
-    <$> newIORef minimumPgVersion -- assume we're in a supported version when starting, this will be corrected on a later step
-    <*> newIORef Nothing
-    <*> newEmptyMVar
-    <*> newEmptyMVar
-    <*> newIORef False
-    <*> newIORef conf
-    <*> mkAutoUpdate defaultUpdateSettings { updateAction = getCurrentTime }
-    <*> mkAutoUpdate defaultUpdateSettings { updateAction = getZonedTime }
-    <*> myThreadId
-    <*> newIORef 0
-    <*> pure (pure ())
+  appState <-
+    AppState pool
+      <$> newIORef minimumPgVersion -- assume we're in a supported version when starting, this will be corrected on a later step
+      <*> newIORef Nothing
+      <*> newEmptyMVar
+      <*> newEmptyMVar
+      <*> newIORef False
+      <*> newIORef conf
+      <*> mkAutoUpdate defaultUpdateSettings{updateAction = getCurrentTime}
+      <*> mkAutoUpdate defaultUpdateSettings{updateAction = getZonedTime}
+      <*> myThreadId
+      <*> newIORef 0
+      <*> pure (pure ())
 
   deb <-
-    let oneSecond = 1000000 in
-    mkDebounce defaultDebounceSettings
-       { debounceAction = logPgrstError appState SQL.AcquisitionTimeoutUsageError
-       , debounceFreq = 5*oneSecond
-       , debounceEdge = leadingEdge -- logs at the start and the end
-       }
+    let oneSecond = 1000000
+     in mkDebounce
+          defaultDebounceSettings
+            { debounceAction = logPgrstError appState SQL.AcquisitionTimeoutUsageError
+            , debounceFreq = 5 * oneSecond
+            , debounceEdge = leadingEdge -- logs at the start and the end
+            }
 
-  return appState { debounceLogAcquisitionTimeout = deb }
+  return appState{debounceLogAcquisitionTimeout = deb}
 
 destroy :: AppState -> IO ()
 destroy = destroyPool
@@ -112,16 +126,17 @@ destroy = destroyPool
 initPool :: AppConfig -> IO SQL.Pool
 initPool AppConfig{..} =
   SQL.acquire configDbPoolSize timeoutMicroseconds $ toUtf8 configDbUri
-  where
-    timeoutMicroseconds = (* oneSecond) <$> configDbPoolAcquisitionTimeout
-    oneSecond = 1000000
+ where
+  timeoutMicroseconds = (* oneSecond) <$> configDbPoolAcquisitionTimeout
+  oneSecond = 1000000
 
 -- | Run an action with a database connection.
 usePool :: AppState -> SQL.Session a -> IO (Either SQL.UsageError a)
-usePool AppState{..} = SQL.use statePool
+usePool AppState{..} session = SQL.use statePool $ R.Session $ \c -> L.run session c
 
--- | Flush the connection pool so that any future use of the pool will
--- use connections freshly established after this call.
+{- | Flush the connection pool so that any future use of the pool will
+ use connections freshly established after this call.
+-}
 flushPool :: AppState -> IO ()
 flushPool AppState{..} = SQL.release statePool
 
@@ -171,9 +186,10 @@ logPgrstError appState e = logWithZTime appState . T.decodeUtf8 . LBS.toStrict $
 getMainThreadId :: AppState -> ThreadId
 getMainThreadId = stateMainThreadId
 
--- | As this IO action uses `takeMVar` internally, it will only return once
--- `stateListener` has been set using `signalListener`. This is currently used
--- to syncronize workers.
+{- | As this IO action uses `takeMVar` internally, it will only return once
+ `stateListener` has been set using `signalListener`. This is currently used
+ to syncronize workers.
+-}
 waitListener :: AppState -> IO ()
 waitListener = takeMVar . stateListener
 

@@ -138,7 +138,7 @@ library
   ghc-options:        -Werror -Wall -fwarn-identities
                       -fno-spec-constr -optP-Wno-nonportable-include-path
   mixins:             hasql hiding (Hasql.Session)
-                    , hasql-api (Hasql.Api.Eff.Session as Hasql.Session)
+                    , hasql-api (Hasql.Api.Eff.Session.Run, Hasql.Api.Eff.Session.Legacy, Hasql.Api.Eff.Session as Hasql.Session)
 
   if flag(dev)
     ghc-options: -O0 -fwrite-ide-info
