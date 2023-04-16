@@ -95,6 +95,9 @@ library
                     , hasql-api
                     , hs-opentelemetry-sdk
                     , hs-opentelemetry-instrumentation-wai
+                    , effectful
+                    , postgresql-libpq
+                    , iproute
                     , hasql-dynamic-statements  >= 0.3.1 && < 0.4
                     , hasql-notifications       >= 0.1 && < 0.3
                     , hasql-pool                >= 0.8.0.6 && < 0.9
@@ -138,7 +141,7 @@ library
   ghc-options:        -Werror -Wall -fwarn-identities
                       -fno-spec-constr -optP-Wno-nonportable-include-path
   mixins:             hasql hiding (Hasql.Session)
-                    , hasql-api (Hasql.Api.Eff.Session.Run, Hasql.Api.Eff.Session.Legacy, Hasql.Api.Eff.Session as Hasql.Session)
+                    , hasql-api (Hasql.Api.Eff.WithResource, Hasql.Api.Eff.Session.Run, Hasql.Api.Eff.Session.Legacy, Hasql.Api.Eff.Session as Hasql.Session)
 
   if flag(dev)
     ghc-options: -O0 -fwrite-ide-info
