@@ -121,8 +121,9 @@ run installHandlers maybeRunWithSocket appState = do
   loadApp = do
     config <- AppState.getConfig appState
     middle <- initMiddleware config appState
-    (IS usePool) <- initSessionRunner appState
-    pure $ postgrest middle usePool appState (Workers.connectionWorker appState)
+    (IS useReadWritePool) <- initSessionRunner appState
+    (IS useReadOnlyPool) <- initSessionRunner appState
+    pure $ postgrest middle useReadWritePool useReadOnlyPool appState (Workers.connectionWorker appState)
 
 serverSettings :: AppConfig -> Warp.Settings
 serverSettings AppConfig{..} =
@@ -145,8 +146,8 @@ initMiddleware conf@AppConfig{configOpenTelemetry} appState =
       . Logger.middleware (configLogLevel conf)
 
 -- | PostgREST application
-postgrest :: Wai.Middleware -> SessionRunner -> AppState.AppState -> IO () -> Wai.Application
-postgrest middleware usePool appState connWorker = do
+postgrest :: Wai.Middleware -> SessionRunner -> SessionRunner -> AppState.AppState -> IO () -> Wai.Application
+postgrest middleware useReadWritePool useReadOnlyPool appState connWorker = do
   middleware $
     -- fromJust can be used, because the auth middleware will **always** add
     -- some AuthResult to the vault.
@@ -159,7 +160,7 @@ postgrest middleware usePool appState connWorker = do
         let
           eitherResponse :: IO (Either Error Wai.Response)
           eitherResponse =
-            runExceptT $ postgrestResponse usePool appState maybeSchemaCache pgVer authResult req
+            runExceptT $ postgrestResponse useReadWritePool useReadOnlyPool appState maybeSchemaCache pgVer authResult req
 
         response <- either Error.errorResponseFor identity <$> eitherResponse
         -- Launch the connWorker when the connection is down.  The postgrest
@@ -175,13 +176,14 @@ type DbHandlerRunner = forall b. SQL.Mode -> Bool -> Bool -> DbHandler b -> Hand
 
 postgrestResponse ::
   SessionRunner ->
+  SessionRunner ->
   AppState.AppState ->
   Maybe SchemaCache ->
   PgVersion ->
   AuthResult ->
   Wai.Request ->
   Handler IO Wai.Response
-postgrestResponse usePool appState maybeSchemaCache pgVer authResult@AuthResult{..} req = do
+postgrestResponse useReadWritePool useReadOnlyPool appState maybeSchemaCache pgVer authResult@AuthResult{..} req = do
   conf@AppConfig{..} <- lift $ AppState.getConfig appState
   sCache <-
     case maybeSchemaCache of
@@ -203,6 +205,9 @@ postgrestResponse usePool appState maybeSchemaCache pgVer authResult@AuthResult{
     runDbHandler mode authenticated prepared handler = do
       dbResp <- lift $ do
         let transaction = if prepared then SQL.transaction else SQL.unpreparedTransaction
+            usePool = case mode of
+              SQL.Read -> useReadOnlyPool
+              SQL.Write -> useReadWritePool
         res <- usePool . transaction SQL.ReadCommitted mode $ runExceptT handler
         whenLeft
           res
