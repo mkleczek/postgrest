@@ -76,11 +76,10 @@ type SignalHandlerInstaller = AppState -> IO ()
 
 type SocketRunner = Warp.Settings -> Wai.Application -> FileMode -> FilePath -> IO ()
 
-type SessionRunner = (forall a. SQL.Session a -> IO (Either SQL.UsageError a))
-newtype IS = IS SessionRunner
+newtype SessionRunner = SessionRunner (forall a. SQL.Session a -> IO (Either SQL.UsageError a))
 
-initSessionRunner :: AppState -> IO IS
-initSessionRunner appState = pure $ IS $ AppState.usePool appState
+initSessionRunner :: AppState -> IO SessionRunner
+initSessionRunner appState = pure $ SessionRunner $ AppState.usePool appState
 
 run :: SignalHandlerInstaller -> Maybe SocketRunner -> AppState -> IO ()
 run installHandlers maybeRunWithSocket appState = do
@@ -121,9 +120,9 @@ run installHandlers maybeRunWithSocket appState = do
   loadApp = do
     config <- AppState.getConfig appState
     middle <- initMiddleware config appState
-    (IS useReadWritePool) <- initSessionRunner appState
-    (IS useReadOnlyPool) <- initSessionRunner appState
-    pure $ postgrest middle useReadWritePool useReadOnlyPool appState (Workers.connectionWorker appState)
+    readWriteRunner <- initSessionRunner appState
+    readOnlyRunner <- initSessionRunner appState
+    pure $ postgrest middle readWriteRunner readOnlyRunner appState (Workers.connectionWorker appState)
 
 serverSettings :: AppConfig -> Warp.Settings
 serverSettings AppConfig{..} =
@@ -205,7 +204,7 @@ postgrestResponse useReadWritePool useReadOnlyPool appState maybeSchemaCache pgV
     runDbHandler mode authenticated prepared handler = do
       dbResp <- lift $ do
         let transaction = if prepared then SQL.transaction else SQL.unpreparedTransaction
-            usePool = case mode of
+            SessionRunner usePool = case mode of
               SQL.Read -> useReadOnlyPool
               SQL.Write -> useReadWritePool
         res <- usePool . transaction SQL.ReadCommitted mode $ runExceptT handler
