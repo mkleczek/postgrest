@@ -7,7 +7,7 @@ module PostgREST.Workers
   , reReadConfig
   , runListener
   , runAdmin
-  ) where
+) where
 
 import qualified Data.ByteString            as BS
 import qualified Data.Text                  as T
@@ -67,41 +67,41 @@ connectionWorker appState = do
   -- Prevents multiple workers to be running at the same time. Could happen on
   -- too many SIGUSR1s.
   where
-    runExclusively mvar action = mask_ $ do
-      success <- tryPutMVar mvar ()
-      when success $ do
-        void $ forkIO $ action `finally` takeMVar mvar
-    work = do
-      AppConfig{..} <- AppState.getConfig appState
-      AppState.logWithZTime appState "Attempting to connect to the database..."
-      connected <- establishConnection appState
-      case connected of
-        FatalConnectionError reason ->
-          -- Fatal error when connecting
-          AppState.logWithZTime appState reason >> killThread (AppState.getMainThreadId appState)
-        NotConnected ->
-          -- Unreachable because establishConnection will keep trying to connect
-          return ()
-        Connected actualPgVersion -> do
-          -- Procede with initialization
-          AppState.putPgVersion appState actualPgVersion
-          when configDbChannelEnabled $
-            AppState.signalListener appState
-          AppState.logWithZTime appState "Connection successful"
-          -- this could be fail because the connection drops, but the
-          -- loadSchemaCache will pick the error and retry again
-          when configDbConfig $ reReadConfig False appState
-          scStatus <- loadSchemaCache appState
-          case scStatus of
-            SCLoaded ->
-              -- do nothing and proceed if the load was successful
-              return ()
-            SCOnRetry ->
-              -- retry reloading the schema cache
-              work
-            SCFatalFail ->
-              -- die if our schema cache query has an error
-              killThread $ AppState.getMainThreadId appState
+  runExclusively mvar action = mask_ $ do
+    success <- tryPutMVar mvar ()
+    when success $ do
+      void $ forkIO $ action `finally` takeMVar mvar
+  work = do
+    AppConfig{..} <- AppState.getConfig appState
+    AppState.logWithZTime appState "Attempting to connect to the database..."
+    connected <- establishConnection appState
+    case connected of
+      FatalConnectionError reason ->
+        -- Fatal error when connecting
+        AppState.logWithZTime appState reason >> killThread (AppState.getMainThreadId appState)
+      NotConnected ->
+        -- Unreachable because establishConnection will keep trying to connect
+        return ()
+      Connected actualPgVersion -> do
+        -- Procede with initialization
+        AppState.putPgVersion appState actualPgVersion
+        when configDbChannelEnabled $
+          AppState.signalListener appState
+        AppState.logWithZTime appState "Connection successful"
+        -- this could be fail because the connection drops, but the
+        -- loadSchemaCache will pick the error and retry again
+        when configDbConfig $ reReadConfig False appState
+        scStatus <- loadSchemaCache appState
+        case scStatus of
+          SCLoaded ->
+            -- do nothing and proceed if the load was successful
+            return ()
+          SCOnRetry ->
+            -- retry reloading the schema cache
+            work
+          SCFatalFail ->
+            -- die if our schema cache query has an error
+            killThread $ AppState.getMainThreadId appState
 
 -- | Repeatedly flush the pool, and check if a connection from the
 -- pool allows access to the PostgreSQL database.
@@ -117,41 +117,41 @@ establishConnection :: AppState -> IO ConnectionStatus
 establishConnection appState =
   retrying retrySettings shouldRetry $
     const $ AppState.flushPool appState >> getConnectionStatus
-  where
-    retrySettings = capDelay delayMicroseconds $ exponentialBackoff backoffMicroseconds
-    delayMicroseconds = 32000000 -- 32 seconds
-    backoffMicroseconds = 1000000 -- 1 second
+ where
+  retrySettings = capDelay delayMicroseconds $ exponentialBackoff backoffMicroseconds
+  delayMicroseconds = 32000000 -- 32 seconds
+  backoffMicroseconds = 1000000 -- 1 second
 
-    getConnectionStatus :: IO ConnectionStatus
-    getConnectionStatus = do
-      pgVersion <- AppState.usePool appState queryPgVersion
-      case pgVersion of
-        Left e -> do
-          AppState.logPgrstError appState e
-          case checkIsFatal e of
-            Just reason ->
-              return $ FatalConnectionError reason
-            Nothing ->
-              return NotConnected
-        Right version ->
+  getConnectionStatus :: IO ConnectionStatus
+  getConnectionStatus = do
+    pgVersion <- AppState.usePool appState queryPgVersion
+    case pgVersion of
+      Left e -> do
+        AppState.logPgrstError appState e
+        case checkIsFatal e of
+          Just reason ->
+            return $ FatalConnectionError reason
+          Nothing ->
+            return NotConnected
+      Right version ->
           if version < minimumPgVersion then
             return . FatalConnectionError $
               "Cannot run in this PostgreSQL version, PostgREST needs at least "
-              <> pgvName minimumPgVersion
+                <> pgvName minimumPgVersion
           else
             return . Connected  $ version
 
-    shouldRetry :: RetryStatus -> ConnectionStatus -> IO Bool
-    shouldRetry rs isConnSucc = do
-      let
-        delay = fromMaybe 0 (rsPreviousDelay rs) `div` backoffMicroseconds
-        itShould = NotConnected == isConnSucc
-      when itShould . AppState.logWithZTime appState $
-        "Attempting to reconnect to the database in "
+  shouldRetry :: RetryStatus -> ConnectionStatus -> IO Bool
+  shouldRetry rs isConnSucc = do
+    let
+      delay = fromMaybe 0 (rsPreviousDelay rs) `div` backoffMicroseconds
+      itShould = NotConnected == isConnSucc
+    when itShould . AppState.logWithZTime appState $
+      "Attempting to reconnect to the database in "
         <> (show delay::Text)
         <> " seconds..."
-      when itShould $ AppState.putRetryNextIn appState delay
-      return itShould
+    when itShould $ AppState.putRetryNextIn appState delay
+    return itShould
 
 -- | Load the SchemaCache by using a connection from the pool.
 loadSchemaCache :: AppState -> IO SCacheStatus
@@ -160,7 +160,7 @@ loadSchemaCache appState = do
   result <-
     let transaction = if configDbPreparedStatements then SQL.transaction else SQL.unpreparedTransaction in
     AppState.usePool appState . transaction SQL.ReadCommitted SQL.Read $
-      querySchemaCache (toList configDbSchemas) configDbExtraSearchPath configDbPreparedStatements
+          querySchemaCache (toList configDbSchemas) configDbExtraSearchPath configDbPreparedStatements
   case result of
     Left e -> do
       case checkIsFatal e of
@@ -180,15 +180,15 @@ loadSchemaCache appState = do
       AppState.logWithZTime appState "Schema cache loaded"
       return SCLoaded
 
-runListener :: AppConfig -> AppState -> IO ()
-runListener AppConfig{configDbChannelEnabled} appState =
-  when configDbChannelEnabled $ listener appState
+runListener :: AppConfig -> AppState -> IO () -> IO ()
+runListener AppConfig{configDbChannelEnabled} appState reloadApp =
+  when configDbChannelEnabled $ listener appState reloadApp
 
 -- | Starts a dedicated pg connection to LISTEN for notifications.  When a
 -- NOTIFY <db-channel> - with an empty payload - is done, it refills the schema
 -- cache.  It uses the connectionWorker in case the LISTEN connection dies.
-listener :: AppState -> IO ()
-listener appState = do
+listener :: AppState -> IO () -> IO ()
+listener appState reloadApp = do
   AppConfig{..} <- AppState.getConfig appState
   let dbChannel = toS configDbChannel
 
@@ -209,26 +209,26 @@ listener appState = do
         SQL.waitForNotifications handleNotification db
       _ ->
         die $ "Could not listen for notifications on the " <> dbChannel <> " channel"
-  where
-    handleFinally dbChannel _ = do
-      -- if the thread dies, we try to recover
-      AppState.logWithZTime appState $ "Retrying listening for notifications on the " <> dbChannel <> " channel.."
-      AppState.putIsListenerOn appState False
-      -- assume the pool connection was also lost, call the connection worker
-      connectionWorker appState
-      -- retry the listener
-      listener appState
+ where
+  handleFinally dbChannel _ = do
+    -- if the thread dies, we try to recover
+    AppState.logWithZTime appState $ "Retrying listening for notifications on the " <> dbChannel <> " channel.."
+    AppState.putIsListenerOn appState False
+    -- assume the pool connection was also lost, call the connection worker
+    connectionWorker appState
+    -- retry the listener
+    listener appState reloadApp
 
-    handleNotification _ msg
-      | BS.null msg            = cacheReloader
-      | msg == "reload schema" = cacheReloader
-      | msg == "reload config" = reReadConfig False appState
-      | otherwise              = pure () -- Do nothing if anything else than an empty message is sent
+  handleNotification _ msg
+    | BS.null msg            = cacheReloader
+    | msg == "reload schema" = cacheReloader
+    | msg == "reload config" = reReadConfig False appState >> reloadApp
+    | otherwise              = pure () -- Do nothing if anything else than an empty message is sent
 
-    cacheReloader =
-      -- reloads the schema cache + restarts pool connections
-      -- it's necessary to restart the pg connections because they cache the pg catalog(see #2620)
-      connectionWorker appState
+  cacheReloader =
+    -- reloads the schema cache + restarts pool connections
+    -- it's necessary to restart the pg connections because they cache the pg catalog(see #2620)
+    connectionWorker appState
 
 -- | Re-reads the config plus config options from the db
 reReadConfig :: Bool -> AppState -> IO ()
@@ -236,20 +236,20 @@ reReadConfig startingUp appState = do
   AppConfig{..} <- AppState.getConfig appState
   dbSettings <-
     if configDbConfig then do
-      qDbSettings <- AppState.usePool appState $ queryDbSettings configDbPreparedStatements
-      case qDbSettings of
-        Left e -> do
-          AppState.logWithZTime appState
-            "An error ocurred when trying to query database settings for the config parameters"
-          case checkIsFatal e of
-            Just hint -> do
-              AppState.logPgrstError appState e
-              AppState.logWithZTime appState hint
-              killThread (AppState.getMainThreadId appState)
-            Nothing -> do
-              AppState.logPgrstError appState e
-          pure []
-        Right x -> pure x
+        qDbSettings <- AppState.usePool appState $ queryDbSettings configDbPreparedStatements
+        case qDbSettings of
+          Left e -> do
+            AppState.logWithZTime appState
+                "An error ocurred when trying to query database settings for the config parameters"
+            case checkIsFatal e of
+              Just hint -> do
+                AppState.logPgrstError appState e
+                AppState.logWithZTime appState hint
+                killThread (AppState.getMainThreadId appState)
+              Nothing -> do
+                AppState.logPgrstError appState e
+            pure []
+          Right x -> pure x
     else
       pure mempty
   readAppConfig dbSettings configFilePath (Just configDbUri) >>= \case
@@ -270,10 +270,10 @@ runAdmin conf@AppConfig{configAdminServerPort} appState settings =
   whenJust configAdminServerPort $ \adminPort -> do
     AppState.logWithZTime appState $ "Admin server listening on port " <> show adminPort
     void . forkIO $ Warp.runSettings (settings & Warp.setPort adminPort) adminApp
-  where
-    whenJust :: Applicative m => Maybe a -> (a -> m ()) -> m ()
-    whenJust mg f = maybe (pure ()) f mg
-    adminApp = admin appState conf
+ where
+  whenJust :: Applicative m => Maybe a -> (a -> m ()) -> m ()
+  whenJust mg f = maybe (pure ()) f mg
+  adminApp = admin appState conf
 
 -- | PostgREST admin application
 admin :: AppState.AppState -> AppConfig -> Wai.Application
@@ -311,21 +311,21 @@ reachMainApp AppConfig{..} =
              | otherwise                                             = Just configServerHost
         filterAddrs xs =
           case configServerHost of
-              "*4" -> ipv4Addrs xs ++ ipv6Addrs xs
-              "!4" -> ipv4Addrs xs
-              "*6" -> ipv6Addrs xs ++ ipv4Addrs xs
-              "!6" -> ipv6Addrs xs
-              _    -> xs
+            "*4" -> ipv4Addrs xs ++ ipv6Addrs xs
+            "!4" -> ipv4Addrs xs
+            "*6" -> ipv6Addrs xs ++ ipv4Addrs xs
+            "!6" -> ipv6Addrs xs
+            _    -> xs
         ipv4Addrs = filter ((/=) AF_INET6 . addrFamily)
         ipv6Addrs = filter ((==) AF_INET6 . addrFamily)
 
       addrs <- getAddrInfo (Just $ defaultHints { addrSocketType = Stream }) (T.unpack <$> host) (Just . show $ configServerPort)
       tryAddr `traverse` filterAddrs addrs
-  where
-    sendEmpty sock = void $ send sock mempty
-    tryAddr :: AddrInfo -> IO (Either IOException ())
-    tryAddr addr = do
-      sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
-      try $ do
-        connect sock $ addrAddress addr
-        withSocketsDo $ bracket (pure sock) close sendEmpty
+ where
+  sendEmpty sock = void $ send sock mempty
+  tryAddr :: AddrInfo -> IO (Either IOException ())
+  tryAddr addr = do
+    sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
+    try $ do
+      connect sock $ addrAddress addr
+      withSocketsDo $ bracket (pure sock) close sendEmpty
