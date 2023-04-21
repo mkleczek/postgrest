@@ -38,6 +38,7 @@
           devShell = {
             tools = hp: {
               treefmt = config.treefmt.build.wrapper;
+              otelcollector = pkgs.opentelemetry-collector;
             } // config.treefmt.build.programs;
             hlsCheck.enable = true;
           };
@@ -64,36 +65,43 @@
           };
         };
 
-        # # Dev shell scripts.
-        # mission-control.scripts = {
-        #   docs = {
-        #     description = "Start Hoogle server for project dependencies";
-        #     exec = ''
-        #       echo http://127.0.0.1:8888
-        #       hoogle serve -p 8888 --local
-        #     '';
-        #     category = "Dev Tools";
-        #   };
-        #   repl = {
-        #     description = "Start the cabal repl";
-        #     exec = ''
-        #       cabal repl "$@"
-        #     '';
-        #     category = "Dev Tools";
-        #   };
-        #   fmt = {
-        #     description = "Format the source tree";
-        #     exec = "${lib.getExe config.treefmt.build.wrapper}";
-        #     category = "Dev Tools";
-        #   };
-        #   run = {
-        #     description = "Run the project with ghcid auto-recompile";
-        #     exec = ''
-        #       ghcid -c "cabal repl exe:hasql-api" --warnings -T :main
-        #     '';
-        #     category = "Primary";
-        #   };
-        # };
+        # Dev shell scripts.
+        mission-control.scripts = {
+          docs = {
+            description = "Start Hoogle server for project dependencies";
+            exec = ''
+              echo http://127.0.0.1:8888
+              hoogle serve -p 8888 --local
+            '';
+            category = "Dev Tools";
+          };
+          repl = {
+            description = "Start the cabal repl";
+            exec = ''
+              cabal repl "$@"
+            '';
+            category = "Dev Tools";
+          };
+          fmt = {
+            description = "Format the source tree";
+            exec = "${lib.getExe config.treefmt.build.wrapper}";
+            category = "Dev Tools";
+          };
+          run = {
+            description = "Run the project with ghcid auto-recompile";
+            exec = ''
+              ghcid -c "cabal repl exe:postgrest" --warnings -T :main
+            '';
+            category = "Primary";
+          };
+          otelcol = {
+            description = "Run OT Collector in the background";
+            exec = ''
+              otelcorecol --config opentelemetry/config.yaml &
+            '';
+            category = "Primary";
+          };
+        };
 
         # Default package.
         packages.default = self'.packages.main-postgrest;

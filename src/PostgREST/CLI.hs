@@ -28,6 +28,7 @@ import qualified PostgREST.AppState as AppState
 import qualified PostgREST.Config   as Config
 
 import Protolude hiding (hPutStrLn)
+import OpenTelemetry.Trace (initializeGlobalTracerProvider, getGlobalTracerProvider, shutdownTracerProvider)
 
 
 main :: App.SignalHandlerInstaller -> Maybe App.SocketRunner -> CLI -> IO ()
@@ -39,8 +40,13 @@ main installSignalHandlers runAppWithSocket CLI{cliCommand, cliPath} = do
   -- explicitly close the connections to PostgreSQL on shutdown.
   -- 'AppState.destroy' takes care of that.
   bracket
-    (AppState.init conf)
-    AppState.destroy
+    (do
+      _ <- initializeGlobalTracerProvider
+      AppState.init conf)
+    ( \appState -> do
+        AppState.destroy appState
+        tracerProvider <- getGlobalTracerProvider
+        shutdownTracerProvider tracerProvider)
     (\appState -> case cliCommand of
       CmdDumpConfig -> do
         when configDbConfig $ reReadConfig True appState

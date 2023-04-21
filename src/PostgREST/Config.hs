@@ -12,6 +12,7 @@ Description : Manages PostgREST configuration type and parser.
 
 module PostgREST.Config
   ( AppConfig (..)
+  , Interceptor(..)
   , Environment
   , JSPath
   , JSPathExp(..)
@@ -60,7 +61,10 @@ import PostgREST.SchemaCache.Identifiers (QualifiedIdentifier, dumpQi,
                                           toQi)
 
 import Protolude hiding (Proxy, toList)
+import Protolude.Partial (read)
+import Data.Text (unpack)
 
+data Interceptor = OpenTelemetryTracing | Logging deriving (Read)
 
 data AppConfig = AppConfig
   { configAppSettings              :: [(Text, Text)]
@@ -98,7 +102,7 @@ data AppConfig = AppConfig
   , configServerUnixSocket         :: Maybe FilePath
   , configServerUnixSocketMode     :: FileMode
   , configAdminServerPort          :: Maybe Int
-  , configOpenTelemetry            :: Bool
+  , configInterceptors             :: [Interceptor]
   }
 
 data LogLevel = LogCrit | LogError | LogWarn | LogInfo
@@ -255,7 +259,7 @@ parser optPath env dbSettings =
     <*> (fmap T.unpack <$> optString "server-unix-socket")
     <*> parseSocketFileMode "server-unix-socket-mode"
     <*> optInt "admin-server-port"
-    <*> (fromMaybe False <$> optBool "open-telemetry")
+    <*> (maybe [] (fmap (read . unpack) . splitOnCommas) <$> optValue "interceptors")
   where
     parseAppSettings :: C.Key -> C.Parser C.Config [(Text, Text)]
     parseAppSettings key = addFromEnv . fmap (fmap coerceText) <$> C.subassocs key C.value

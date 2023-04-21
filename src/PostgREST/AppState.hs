@@ -1,4 +1,13 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ImpredicativeTypes #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module PostgREST.AppState
   ( AppState
@@ -23,6 +32,7 @@ module PostgREST.AppState
   , putRetryNextIn
   , signalListener
   , usePool
+  , reloadUsePool
   , waitListener
   , debounceLogAcquisitionTimeout
   ) where
@@ -42,13 +52,23 @@ import Data.Time          (ZonedTime, defaultTimeLocale, formatTime,
                            getZonedTime)
 import Data.Time.Clock    (UTCTime, getCurrentTime)
 
-import PostgREST.Config           (AppConfig (..))
+import PostgREST.Config           (AppConfig (..), Interceptor (..))
 import PostgREST.Config.PgVersion (PgVersion (..), minimumPgVersion)
 import PostgREST.SchemaCache      (SchemaCache)
 
 import Protolude
+import qualified Hasql.Connection as S
+import Effectful
+import qualified Hasql.Api.Eff.Throws as Err
+import Hasql.Api.Eff.WithResource
+import Hasql.Api.Session
+import Hasql.Pool.Eff (runPoolHandler')
+import PostgREST.OpenTelemetry (withTracer)
+import Hasql.Api.Eff.Util (logSql)
+import qualified Hasql.Statement as SQL
+import Protolude.Base (Show(..))
 
-
+newtype UsePool = UsePool (forall a. SQL.Session a -> IO (Either SQL.UsageError a))
 data AppState = AppState
   -- | Database connection pool
   { statePool                     :: SQL.Pool
@@ -74,6 +94,7 @@ data AppState = AppState
   , stateRetryNextIn              :: IORef Int
   -- | Logs a pool error with a debounce
   , debounceLogAcquisitionTimeout :: IO ()
+  , stateUsePool                  :: IORef UsePool
   }
 
 init :: AppConfig -> IO AppState
@@ -95,6 +116,7 @@ initWithPool pool conf = do
     <*> myThreadId
     <*> newIORef 0
     <*> pure (pure ())
+    <*> newIORef (UsePool $ interceptedUsePool (configInterceptors conf) pool)
 
   deb <-
     let oneSecond = 1000000 in
@@ -116,10 +138,25 @@ initPool AppConfig{..} =
     timeoutMicroseconds = (* oneSecond) <$> configDbPoolAcquisitionTimeout
     oneSecond = 1000000
 
--- | Run an action with a database connection.
-usePool :: AppState -> SQL.Session a -> IO (Either SQL.UsageError a)
-usePool AppState{..} = SQL.use statePool
+instance Show (SQL.Statement p r) where
+  show (SQL.Statement s _ _ _) = Protolude.show s
 
+interceptedUsePool :: forall a. [Interceptor] -> SQL.Pool -> SQL.Session a -> IO (Either SQL.UsageError a)
+interceptedUsePool interceptors statePool = runEff -- run IOE effect in IO monad
+    . runWithPoolEither -- pooled WithConnection implementation - it wraps QueryError and handles Error UsageError
+    . runReaderWithResource @S.Connection @'[Err.Throws SQL.QueryError, IOE] -- WithConnection to Reader Connection
+    . runSessionWithConnectionReader -- SqlEff (runs the actual SQL session)
+    . sqlInterceptors -- run all interceptors
+    . SQL.toEff  -- get Eff from Session
+    where
+      runWithPoolEither = Err.runErrorNoCallStack . runPoolHandler' statePool inject Err.throwError
+      sqlInterceptors = foldl' (.) identity . fmap sqlInterceptor $ interceptors
+      sqlInterceptor = \case
+        Logging -> logSql @ByteString @SQL.Statement
+        OpenTelemetryTracing -> withTracer
+
+usePool :: AppState -> SQL.Session a -> IO (Either SQL.UsageError a)
+usePool AppState{stateUsePool} session = readIORef stateUsePool >>= \(UsePool up) -> up session
 -- | Flush the connection pool so that any future use of the pool will
 -- use connections freshly established after this call.
 flushPool :: AppState -> IO ()
@@ -187,3 +224,8 @@ getIsListenerOn = readIORef . stateIsListenerOn
 
 putIsListenerOn :: AppState -> Bool -> IO ()
 putIsListenerOn = atomicWriteIORef . stateIsListenerOn
+
+reloadUsePool :: AppState -> IO ()
+reloadUsePool AppState{stateConf, statePool, stateUsePool} = do
+  AppConfig{configInterceptors} <- readIORef stateConf
+  atomicWriteIORef stateUsePool $ UsePool $ interceptedUsePool configInterceptors statePool

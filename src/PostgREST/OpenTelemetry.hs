@@ -8,7 +8,6 @@
 {-# LANGUAGE ImpredicativeTypes #-}
 
 module PostgREST.OpenTelemetry (
-    initOpenTelemetry,
     withTracer
 ) where
 
@@ -19,10 +18,8 @@ import Data.Text (Text, unpack, pack)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8)
 import Data.Typeable (Typeable, typeOf)
-import Effectful.Dispatch.Dynamic (interpose, localSeqUnlift, send)
-import Effectful.Error.Static (prettyCallStack)
-import qualified Effectful.Error.Static as E
-import Effectful.Reader.Static (Reader, ask, runReader)
+import Effectful.Dispatch.Dynamic (interpose, send)
+import Effectful.Reader.Static (Reader, ask)
 import Hasql.Api.Eff (SqlEff (..))
 import Hasql.Statement (Statement (Statement))
 import OpenTelemetry.Trace (Attribute, NewEvent (..), SpanArguments (..), SpanKind (..), ToAttribute (..), Tracer, addEvent, inSpan', setStatus, InstrumentationLibrary (..), TracerOptions (..), getGlobalTracerProvider, makeTracer, TracerProvider)
@@ -39,39 +36,34 @@ import qualified Data.ByteString.Char8 as C
 import Hasql.Session (QueryError)
 import qualified Data.Text.Encoding as TE
 import PostgREST.Version (prettyVersion)
+import Hasql.Api.Eff.Throws
+import GHC.Exception (prettyCallStackLines)
 
 newtype ConnectionAttributes = ConnectionAttributes [(Text, Attribute)]
 
-withTracer :: forall es a. (SqlEff ByteString Statement :> es, Reader Connection :> es, E.Error QueryError :> es, IOE :> es) => Eff es a -> Eff es a
+withTracer :: forall es a. (SqlEff ByteString Statement :> es, Reader Connection :> es, Throws QueryError :> es, IOE :> es) => Eff es a -> Eff es a
 withTracer eff = do
-    tp <- getGlobalTracerProvider
-    initOpenTelemetry tp eff
-
-
-initOpenTelemetry :: forall es a. (SqlEff ByteString Statement :> es, Reader Connection :> es, E.Error QueryError :> es, IOE :> es) => TracerProvider -> Eff es a -> Eff es a
-initOpenTelemetry tracerProvider eff = 
+    tracerProvider <- getGlobalTracerProvider
     let tracer =  makeTracer
                     tracerProvider
                     InstrumentationLibrary {libraryVersion= TE.decodeUtf8 prettyVersion, libraryName= T.pack "hs-opentelemetry-instrumentation-postgrest"}
                     TracerOptions {tracerSchema=Nothing}
-    in
-        connectionAttributes >>= \attrs -> traceSql @QueryError tracer attrs eff
+    attrs <- connectionAttributes
+    traceSql @QueryError tracer attrs eff
 
-traceSql :: forall ex es a. (Show ex, Typeable ex, E.Error ex :> es, IOE :> es, SqlEff ByteString Statement :> es) => Tracer -> ConnectionAttributes -> Eff es a -> Eff es a
-traceSql tracer (ConnectionAttributes attrs) = interpose @(SqlEff ByteString Statement) $ \env e -> do
-    let (query, attr) = case e of
-            (SqlCommand sqlQuery) -> (\decoded -> (decoded, toAttribute decoded)) $ decodeUtf8 sqlQuery
-            (SqlStatement _ (Statement sqlQuery _ _ _)) -> (\decoded -> (decoded, toAttribute decoded)) $ decodeUtf8 sqlQuery
+
+traceSql :: forall ex es a. (Show ex, Typeable ex, Throws ex :> es, IOE :> es, SqlEff ByteString Statement :> es) => Tracer -> ConnectionAttributes -> Eff es a -> Eff es a
+traceSql tracer (ConnectionAttributes attrs) = interpose @(SqlEff ByteString Statement) $ \_ e -> do
+    let (query, attr, locale) = case e of
+            (SqlCommand sqlQuery) -> (\decoded -> (decoded, toAttribute decoded, SqlCommand sqlQuery)) $ decodeUtf8 sqlQuery
+            (SqlStatement params (Statement sqlQuery a b c)) -> (\decoded -> (decoded, toAttribute decoded, SqlStatement params (Statement sqlQuery a b c))) $ decodeUtf8 sqlQuery
     inSpan'
         tracer
         query
         (SpanArguments Client (("db.statement", attr) : attrs) [] Nothing)
         ( \otspan ->
-            E.catchError @ex
-                ( runReader otspan $ do
-                    localSeqUnlift env $
-                        \unlift -> unlift $ send e
-                )
+            catchError @ex
+                ( send @(SqlEff ByteString Statement) locale)
                 ( \cs exc -> do
                     setStatus otspan $ OT.Error $ T.pack $ show exc
                     addEvent otspan $
@@ -80,11 +72,11 @@ traceSql tracer (ConnectionAttributes attrs) = interpose @(SqlEff ByteString Sta
                             , newEventAttributes =
                                 [ ("exception.type", toAttribute $ T.pack $ show $ typeOf exc)
                                 , ("exception.message", toAttribute $ T.pack $ show exc)
-                                , ("exception.stacktrace", toAttribute $ T.pack $ prettyCallStack cs)
+                                , ("exception.stacktrace", toAttribute (T.pack <$> prettyCallStackLines cs))
                                 ]
                             , newEventTimestamp = Nothing
                             }
-                    E.throwError exc
+                    throwError exc
                 )
         )
 

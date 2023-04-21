@@ -2,6 +2,9 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 
 {- |
 Module      : PostgREST.App
@@ -56,9 +59,9 @@ import PostgREST.ApiRequest (
   Mutation (..),
   Target (..),
  )
-import PostgREST.AppState (AppState)
+import PostgREST.AppState (AppState, reloadUsePool)
 import PostgREST.Auth (AuthResult (..))
-import PostgREST.Config (AppConfig (..))
+import PostgREST.Config (AppConfig (..), Interceptor (..))
 import PostgREST.Config.PgVersion (PgVersion (..))
 import PostgREST.Error (Error)
 import PostgREST.Query (DbHandler)
@@ -68,7 +71,6 @@ import PostgREST.Version (prettyVersion)
 import Data.IORef (atomicWriteIORef, newIORef, readIORef)
 import Protolude hiding (Handler)
 import OpenTelemetry.Instrumentation.Wai
-import qualified Hasql.Session as SQL
 
 type Handler = ExceptT Error
 
@@ -76,10 +78,16 @@ type SignalHandlerInstaller = AppState -> IO ()
 
 type SocketRunner = Warp.Settings -> Wai.Application -> FileMode -> FilePath -> IO ()
 
-newtype SessionRunner = SessionRunner (forall a. SQL.Session a -> IO (Either SQL.UsageError a))
-
-initSessionRunner :: AppState -> IO SessionRunner
-initSessionRunner appState = pure $ SessionRunner $ AppState.usePool appState
+initMiddleware :: AppConfig -> AppState -> IO Wai.Middleware
+initMiddleware conf@AppConfig{configInterceptors} appState = do
+  middlewareStack <- traverse middleware configInterceptors
+  pure $ Cors.middleware . Auth.middleware appState . foldl' (.) identity middlewareStack
+  where
+    middleware = \case
+        OpenTelemetryTracing -> newOpenTelemetryWaiMiddleware
+        Logging -> pure $
+              Response.traceHeaderMiddleware conf
+            . Logger.middleware (configLogLevel conf)
 
 run :: SignalHandlerInstaller -> Maybe SocketRunner -> AppState -> IO ()
 run installHandlers maybeRunWithSocket appState = do
@@ -120,9 +128,8 @@ run installHandlers maybeRunWithSocket appState = do
   loadApp = do
     config <- AppState.getConfig appState
     middle <- initMiddleware config appState
-    readWriteRunner <- initSessionRunner appState
-    readOnlyRunner <- initSessionRunner appState
-    pure $ postgrest middle readWriteRunner readOnlyRunner appState (Workers.connectionWorker appState)
+    reloadUsePool appState
+    pure $ postgrest middle appState (Workers.connectionWorker appState)
 
 serverSettings :: AppConfig -> Warp.Settings
 serverSettings AppConfig{..} =
@@ -131,22 +138,9 @@ serverSettings AppConfig{..} =
     & setPort configServerPort
     & setServerName ("postgrest/" <> prettyVersion)
 
-initMiddleware :: AppConfig -> AppState -> IO Wai.Middleware
-initMiddleware conf@AppConfig{configOpenTelemetry} appState =
-  if configOpenTelemetry then do
-    otMiddleware <- newOpenTelemetryWaiMiddleware
-    pure $ otMiddleware
-      . Cors.middleware
-      . Auth.middleware appState
-  else
-    pure $ Response.traceHeaderMiddleware conf
-      . Cors.middleware
-      . Auth.middleware appState
-      . Logger.middleware (configLogLevel conf)
-
 -- | PostgREST application
-postgrest :: Wai.Middleware -> SessionRunner -> SessionRunner -> AppState.AppState -> IO () -> Wai.Application
-postgrest middleware useReadWritePool useReadOnlyPool appState connWorker = do
+postgrest :: Wai.Middleware -> AppState.AppState -> IO () -> Wai.Application
+postgrest middleware appState connWorker = do
   middleware $
     -- fromJust can be used, because the auth middleware will **always** add
     -- some AuthResult to the vault.
@@ -159,7 +153,7 @@ postgrest middleware useReadWritePool useReadOnlyPool appState connWorker = do
         let
           eitherResponse :: IO (Either Error Wai.Response)
           eitherResponse =
-            runExceptT $ postgrestResponse useReadWritePool useReadOnlyPool appState maybeSchemaCache pgVer authResult req
+            runExceptT $ postgrestResponse appState maybeSchemaCache pgVer authResult req
 
         response <- either Error.errorResponseFor identity <$> eitherResponse
         -- Launch the connWorker when the connection is down.  The postgrest
@@ -174,15 +168,13 @@ postgrest middleware useReadWritePool useReadOnlyPool appState connWorker = do
 type DbHandlerRunner = forall b. SQL.Mode -> Bool -> Bool -> DbHandler b -> Handler IO b
 
 postgrestResponse ::
-  SessionRunner ->
-  SessionRunner ->
   AppState.AppState ->
   Maybe SchemaCache ->
   PgVersion ->
   AuthResult ->
   Wai.Request ->
   Handler IO Wai.Response
-postgrestResponse useReadWritePool useReadOnlyPool appState maybeSchemaCache pgVer authResult@AuthResult{..} req = do
+postgrestResponse appState maybeSchemaCache pgVer authResult@AuthResult{..} req = do
   conf@AppConfig{..} <- lift $ AppState.getConfig appState
   sCache <-
     case maybeSchemaCache of
@@ -204,9 +196,9 @@ postgrestResponse useReadWritePool useReadOnlyPool appState maybeSchemaCache pgV
     runDbHandler mode authenticated prepared handler = do
       dbResp <- lift $ do
         let transaction = if prepared then SQL.transaction else SQL.unpreparedTransaction
-            SessionRunner usePool = case mode of
-              SQL.Read -> useReadOnlyPool
-              SQL.Write -> useReadWritePool
+            usePool = case mode of
+              SQL.Read -> AppState.usePool appState
+              SQL.Write -> AppState.usePool appState
         res <- usePool . transaction SQL.ReadCommitted mode $ runExceptT handler
         whenLeft
           res
