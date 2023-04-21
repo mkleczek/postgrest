@@ -88,6 +88,7 @@ data AppConfig = AppConfig
   , configFilePath                 :: Maybe FilePath
   , configJWKS                     :: Maybe JWKSet
   , configJwtAudience              :: Maybe StringOrURI
+  , configJwtIssuer                :: Maybe StringOrURI
   , configJwtRoleClaimKey          :: JSPath
   , configJwtSecret                :: Maybe BS.ByteString
   , configJwtSecretIsBase64        :: Bool
@@ -242,7 +243,8 @@ parser optPath env dbSettings =
     <*> (fromMaybe True <$> optBool "db-use-legacy-gucs")
     <*> pure optPath
     <*> pure Nothing
-    <*> parseJwtAudience "jwt-aud"
+    <*> parseJwtStringOrURI "jwt-aud" "Invalid Jwt audience. Check your configuration."
+    <*> parseJwtStringOrURI "jwt-issuer" "Invalid Jwt issuer. Check your configuration."
     <*> parseRoleClaimKey "jwt-role-claim-key" "role-claim-key"
     <*> (fmap encodeUtf8 <$> optString "jwt-secret")
     <*> (fromMaybe False <$> optWithAlias
@@ -297,12 +299,12 @@ parser optPath env dbSettings =
         Just val | isMalformedProxyUri val -> fail "Malformed proxy uri, a correct example: https://example.com:8443/basePath"
                  | otherwise               -> pure $ Just val
 
-    parseJwtAudience :: C.Key -> C.Parser C.Config (Maybe StringOrURI)
-    parseJwtAudience k =
+    parseJwtStringOrURI :: C.Key -> [Char] -> C.Parser C.Config (Maybe StringOrURI)
+    parseJwtStringOrURI k errorMessage =
       optString k >>= \case
         Nothing -> pure Nothing -- no audience in config file
         Just aud -> case preview stringOrUri (T.unpack aud) of
-          Nothing -> fail "Invalid Jwt audience. Check your configuration."
+          Nothing -> fail errorMessage
           aud' -> pure aud'
 
     parseLogLevel :: C.Key -> C.Parser C.Config LogLevel

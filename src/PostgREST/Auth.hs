@@ -63,10 +63,10 @@ parseToken AppConfig{..} token time = do
   liftEither . mapLeft jwtClaimsError $ JSON.toJSON <$> eitherClaims
   where
     validation =
-      JWT.defaultJWTValidationSettings audienceCheck & set JWT.allowedSkew 1
+      JWT.defaultJWTValidationSettings (jwtCheck configJwtAudience) & set JWT.allowedSkew 1 & set JWT.issuerPredicate (jwtCheck configJwtIssuer)
 
-    audienceCheck :: JWT.StringOrURI -> Bool
-    audienceCheck = maybe (const True) (==) configJwtAudience
+    jwtCheck :: Maybe JWT.StringOrURI -> JWT.StringOrURI -> Bool
+    jwtCheck = maybe (const True) (==)
 
     jwtClaimsError :: JWT.JWTError -> Error
     jwtClaimsError JWT.JWTExpired = JwtTokenInvalid "JWT expired"
