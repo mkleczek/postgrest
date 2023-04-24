@@ -64,7 +64,7 @@ import Protolude hiding (Proxy, toList)
 import Protolude.Partial (read)
 import Data.Text (unpack)
 
-data Interceptor = OpenTelemetryTracing | Logging deriving (Read)
+data Interceptor = OpenTelemetryTracing | Logging deriving (Read, Eq, Ord)
 
 data AppConfig = AppConfig
   { configAppSettings              :: [(Text, Text)]

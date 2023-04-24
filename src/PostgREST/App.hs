@@ -71,6 +71,7 @@ import PostgREST.Version (prettyVersion)
 import Data.IORef (atomicWriteIORef, newIORef, readIORef)
 import Protolude hiding (Handler)
 import OpenTelemetry.Instrumentation.Wai
+import Data.List (nub)
 
 type Handler = ExceptT Error
 
@@ -80,14 +81,15 @@ type SocketRunner = Warp.Settings -> Wai.Application -> FileMode -> FilePath -> 
 
 initMiddleware :: AppConfig -> AppState -> IO Wai.Middleware
 initMiddleware conf@AppConfig{configInterceptors} appState = do
-  middlewareStack <- traverse middleware configInterceptors
-  pure $ Cors.middleware . Auth.middleware appState . foldl' (.) identity middlewareStack
+  middlewareStack <- middleware $ sort $ nub configInterceptors-- traverse middleware $ [(x, xs) | x:xs <- tails $ sort $ nub configInterceptors, y <- xs]
+  pure $ Cors.middleware . Auth.middleware appState . middlewareStack --foldl' (.) identity middlewareStack
   where
     middleware = \case
-        OpenTelemetryTracing -> newOpenTelemetryWaiMiddleware
-        Logging -> pure $
+        OpenTelemetryTracing:_ -> newOpenTelemetryWaiMiddleware
+        Logging:_ -> pure $
               Response.traceHeaderMiddleware conf
             . Logger.middleware (configLogLevel conf)
+        _ -> pure $ Response.traceHeaderMiddleware conf
 
 run :: SignalHandlerInstaller -> Maybe SocketRunner -> AppState -> IO ()
 run installHandlers maybeRunWithSocket appState = do
