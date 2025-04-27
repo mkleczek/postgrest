@@ -4,6 +4,7 @@ Description : PostgREST functions to translate HTTP request to a domain type cal
 -}
 {-# LANGUAGE LambdaCase     #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RankNTypes #-}
 module PostgREST.ApiRequest
   ( ApiRequest(..)
   , InvokeMethod(..)
@@ -39,16 +40,14 @@ import Data.Ranged.Ranges        (emptyRange, rangeIntersection,
 import Network.HTTP.Types.Header (RequestHeaders, hCookie)
 import Network.HTTP.Types.URI    (parseSimpleQuery)
 import Network.Wai               (Request (..))
-import Network.Wai.Parse         (parseHttpAccept)
 import Web.Cookie                (parseCookies)
 
 import PostgREST.ApiRequest.QueryParams  (QueryParams (..))
 import PostgREST.Config                  (AppConfig (..),
                                           OpenAPIMode (..))
 import PostgREST.Config.Database         (TimezoneNames)
-import PostgREST.Error                   (ApiRequestError (..),
-                                          RangeError (..))
-import PostgREST.MediaType               (MediaType (..))
+import PostgREST.Error                   (RangeError (..), ApiRequestError (..))
+import PostgREST.MediaType               (MediaType (..), mTTextPlain, mTApplicationJSON, mTTextCSV, mTUrlEncoded, mTTextXML, mTOctetStream)
 import PostgREST.RangeQuery              (NonnegRange, allRange,
                                           convertToLimitZeroRange,
                                           hasLimitZero,
@@ -59,9 +58,10 @@ import PostgREST.SchemaCache.Identifiers (FieldName,
 
 import qualified PostgREST.ApiRequest.Preferences as Preferences
 import qualified PostgREST.ApiRequest.QueryParams as QueryParams
-import qualified PostgREST.MediaType              as MediaType
 
 import Protolude
+import Network.HTTP.Media (mapContentMedia, mapAcceptMedia)
+import Network.HTTP.Media.RenderHeader (RenderHeader(renderHeader))
 
 
 type RequestBody = LBS.ByteString
@@ -122,8 +122,10 @@ data ApiRequest = ApiRequest {
   , iMethod              :: ByteString                       -- ^ Raw request method
   , iSchema              :: Schema                           -- ^ The request schema. Can vary depending on profile headers.
   , iNegotiatedByProfile :: Bool                             -- ^ If schema was was chosen according to the profile spec https://www.w3.org/TR/dx-prof-conneg/
-  , iAcceptMediaType     :: [MediaType]                      -- ^ The resolved media types in the Accept, considering quality(q) factors
-  , iContentMediaType    :: MediaType                        -- ^ The media type in the Content-Type header
+  , iMapAccept           :: forall b. [(MediaType, b)] -> Either ApiRequestError b
+  , iMapContent          :: forall b. [(MediaType, Maybe (Either ByteString b))] -> Either ByteString b
+--  , iAcceptMediaType     :: [MediaType]                      -- ^ The resolved media types in the Accept, considering quality(q) factors
+--  , iContentMediaType    :: MediaType                        -- ^ The media type in the Content-Type header
   }
 
 -- | Examines HTTP request and translates it into user intent.
@@ -136,7 +138,7 @@ userApiRequest conf req reqBody timezones = do
   act <- getAction resource schema method
   qPrms <- first QueryParamError $ QueryParams.parse (actIsInvokeSafe act) $ rawQueryString req
   (topLevelRange, ranges) <- getRanges method qPrms hdrs
-  (payload, columns) <- getPayload reqBody contentMediaType qPrms act
+  (payload, columns) <- getPayload reqBody mapContent qPrms act
   return $ ApiRequest {
     iAction = act
   , iRange = ranges
@@ -151,8 +153,8 @@ userApiRequest conf req reqBody timezones = do
   , iMethod = method
   , iSchema = schema
   , iNegotiatedByProfile = negotiatedByProfile
-  , iAcceptMediaType = maybe [MTAny] (map MediaType.decodeMediaType . parseHttpAccept) $ lookupHeader "accept"
-  , iContentMediaType = contentMediaType
+  , iMapAccept = \l -> note (MediaTypeError []) (join $ mapAcceptMedia l (fromMaybe "*/*" (lookupHeader "accept")))
+  , iMapContent = mapContent
   }
   where
     method = requestMethod req
@@ -160,8 +162,10 @@ userApiRequest conf req reqBody timezones = do
     lookupHeader    = flip lookup hdrs
     iHdrs = [ (CI.foldedCase k, v) | (k,v) <- hdrs, k /= hCookie]
     iCkies = maybe [] parseCookies $ lookupHeader "Cookie"
-    contentMediaType = maybe MTApplicationJSON MediaType.decodeMediaType $ lookupHeader "content-type"
     actIsInvokeSafe x = case x of {ActDb (ActRoutine _  (InvRead _)) -> True; _ -> False}
+    mapContent l = fromMaybe (Left ("Content-Type not acceptable: " <> contentHeader)) (join $ mapContentMedia l contentHeader)
+    contentHeader = fromMaybe (renderHeader mTApplicationJSON) $ lookupHeader "content-type"
+
 
 getResource :: AppConfig -> [Text] -> Either ApiRequestError Resource
 getResource AppConfig{configOpenApiMode, configDbRootSpec} = \case
@@ -238,8 +242,8 @@ getRanges method QueryParams{qsRanges} hdrs
     isInvalidRange = topLevelRange == emptyRange && not (hasLimitZero limitRange)
     topLevelRange = fromMaybe allRange $ HM.lookup "limit" ranges -- if no limit is specified, get all the request rows
 
-getPayload :: RequestBody -> MediaType -> QueryParams.QueryParams -> Action -> Either ApiRequestError (Maybe Payload, S.Set FieldName)
-getPayload reqBody contentMediaType QueryParams{qsColumns} action = do
+getPayload :: RequestBody -> (forall b. [(MediaType, Maybe (Either ByteString b))] -> Either ByteString b) -> QueryParams.QueryParams -> Action -> Either ApiRequestError (Maybe Payload, S.Set FieldName)
+getPayload reqBody mapContent QueryParams{qsColumns} action = do
   checkedPayload <- if shouldParsePayload then payload else Right Nothing
   let cols = case (checkedPayload, columns) of
         (Just ProcessedJSON{payKeys}, _)       -> payKeys
@@ -249,28 +253,406 @@ getPayload reqBody contentMediaType QueryParams{qsColumns} action = do
   return (checkedPayload, cols)
   where
     payload :: Either ApiRequestError (Maybe Payload)
-    payload = mapBoth InvalidBody Just $ case (contentMediaType, isProc) of
-      (MTApplicationJSON, _) ->
-        if isJust columns
+    payload = mapBoth InvalidBody Just $ mapContent [
+      (mTApplicationJSON, Just $ if isJust columns
           then Right $ RawJSON reqBody
           else note "All object keys must match" . payloadAttributes reqBody
                  =<< if LBS.null reqBody && isProc
                        then Right emptyObject
                        else first BS.pack $
                           -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
-                          maybe (Left "Empty or invalid json") Right $ JSON.decode reqBody
-      (MTTextCSV, _) -> do
-        json <- csvToJson <$> first BS.pack (CSV.decodeByName reqBody)
-        note "All lines must have same number of fields" $ payloadAttributes (JSON.encode json) json
-      (MTUrlEncoded, True) ->
-        Right $ ProcessedUrlEncoded params (S.fromList $ fst <$> params)
-      (MTUrlEncoded, False) ->
-        let paramsMap = HM.fromList $ (identity *** JSON.String) <$> params in
-        Right $ ProcessedJSON (JSON.encode paramsMap) $ S.fromList (HM.keys paramsMap)
-      (MTTextPlain, True) -> Right $ RawPay reqBody
-      (MTTextXML, True) -> Right $ RawPay reqBody
-      (MTOctetStream, True) -> Right $ RawPay reqBody
-      (ct, _) -> Left $ "Content-Type not acceptable: " <> MediaType.toMime ct
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+
+                          -- Drop parsing error message in favor of generic one (https://github.com/PostgREST/postgrest/issues/2344)
+                          maybe (Left "Empty or invalid json") Right $ JSON.decode reqBody)
+      ,(mTTextCSV, Just $ do
+          json <- csvToJson <$> first BS.pack (CSV.decodeByName reqBody)
+          note "All lines must have same number of fields" $ payloadAttributes (JSON.encode json) json)
+      ,(mTUrlEncoded, Just $
+        if isProc
+          then Right $ ProcessedUrlEncoded params (S.fromList $ fst <$> params)
+          else
+            let paramsMap = HM.fromList $ (identity *** JSON.String) <$> params
+            in Right $ ProcessedJSON (JSON.encode paramsMap) $ S.fromList (HM.keys paramsMap))
+      ,(mTTextPlain, toMaybe isProc $ Right $ RawPay reqBody)
+      ,(mTTextXML, toMaybe isProc $ Right $ RawPay reqBody)
+      ,(mTOctetStream, toMaybe isProc $ Right $ RawPay reqBody)
+      ]
+
+    toMaybe b a = if b then Just a else Nothing
+    -- payload = mapBoth InvalidBody Just $ case (contentMediaType, isProc) of
+    --   (MTApplicationJSON, _) ->
+    --   (MTTextCSV, _) -> do
+        -- json <- csvToJson <$> first BS.pack (CSV.decodeByName reqBody)
+        -- note "All lines must have same number of fields" $ payloadAttributes (JSON.encode json) json
+    --   (MTUrlEncoded, True) ->
+    --     Right $ ProcessedUrlEncoded params (S.fromList $ fst <$> params)
+    --   (MTUrlEncoded, False) ->
+    --     let paramsMap = HM.fromList $ (identity *** JSON.String) <$> params in Right $ ProcessedJSON (JSON.encode paramsMap) $ S.fromList (HM.keys paramsMap)
+    --   (MTTextPlain, True) -> Right $ RawPay reqBody
+    --   (MTTextXML, True) -> Right $ RawPay reqBody
+    --   (MTOctetStream, True) -> Right $ RawPay reqBody
+    --   (ct, _) -> Left $ "Content-Type not acceptable: " <> MediaType.toMime ct
 
     shouldParsePayload = case action of
       ActDb (ActRelationMut _ MutationDelete) -> False

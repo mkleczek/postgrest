@@ -9,6 +9,7 @@ module PostgREST.SchemaCache.Routine
   , FuncSettings
   , RoutineMap
   , RetType(..)
+  , ResolvedHandlers(..)
   , funcReturnsScalar
   , funcReturnsSetOfScalar
   , funcReturnsSingleComposite
@@ -151,4 +152,8 @@ funcTableName proc = case pdReturnType proc of
 
 -- the resolved handler also carries the media type because MTAny (*/*) is resolved to a different media type
 type ResolvedHandler = (MediaHandler, MediaType.MediaType)
-type MediaHandlerMap = HM.HashMap (RelIdentifier, MediaType.MediaType) ResolvedHandler
+data ResolvedHandlers = ResolvedHandlers {
+  all :: [(MediaType.MediaType, ResolvedHandler)],
+  any :: Maybe ResolvedHandler
+}
+type MediaHandlerMap = HM.HashMap RelIdentifier ResolvedHandlers

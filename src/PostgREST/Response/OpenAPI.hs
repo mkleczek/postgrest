@@ -349,7 +349,7 @@ makeProcPathItem pd = ("/rpc/" ++ toS (pdName pd), pe)
       & summary .~ pSum
       & description .~ mfilter (/="") pDesc
       & tags .~ Set.fromList ["(rpc) " <> pdName pd]
-      & produces ?~ makeMimeList [MTApplicationJSON, MTVndSingularJSON True, MTVndSingularJSON False]
+      & produces ?~ makeMimeList [mTApplicationJSON, mTVndSingularJSONStripped, mTVndSingularJSON]
       & at 200 ?~ "OK"
     getOp = procOp
       & parameters .~ makeProcGetParams (pdParams pd)
@@ -365,7 +365,7 @@ makeRootPathItem = ("/", p)
     getOp = (mempty :: Operation)
       & tags .~ Set.fromList ["Introspection"]
       & summary ?~ "OpenAPI description (this document)"
-      & produces ?~ makeMimeList [MTOpenAPI, MTApplicationJSON]
+      & produces ?~ makeMimeList [mTOpenAPI, mTApplicationJSON]
       & at 200 ?~ "OK"
     pr = (mempty :: PathItem) & get ?~ getOp
     p = pr
@@ -405,8 +405,8 @@ postgrestSpec (prettyVersion, docsVersion) rels pds ti (s, h, p, b) sd allowSecu
   & definitions .~ fromList (makeTableDef rels <$> ti)
   & parameters .~ fromList (makeParamDefs ti)
   & paths .~ makePathItems pds ti
-  & produces .~ makeMimeList [MTApplicationJSON, MTVndSingularJSON True, MTVndSingularJSON False, MTTextCSV]
-  & consumes .~ makeMimeList [MTApplicationJSON, MTVndSingularJSON True, MTVndSingularJSON False, MTTextCSV]
+  & produces .~ makeMimeList [mTApplicationJSON, mTVndSingularJSONStripped, mTVndSingularJSON, mTTextCSV]
+  & consumes .~ makeMimeList [mTApplicationJSON, mTVndSingularJSONStripped, mTVndSingularJSON, mTTextCSV]
   & securityDefinitions .~ makeSecurityDefinitions securityDefName allowSecurityDef
   & security .~ [SecurityRequirement (fromList [(securityDefName, [])]) | allowSecurityDef]
     where

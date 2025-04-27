@@ -35,7 +35,7 @@ import Network.Wai (Response, responseLBS)
 
 import Network.HTTP.Types.Header (Header)
 
-import           PostgREST.MediaType (MediaType (..))
+import           PostgREST.MediaType (MediaType (..), mTApplicationJSON, mTTextPlain, mTTextXML, mTOctetStream)
 import qualified PostgREST.MediaType as MediaType
 
 import PostgREST.SchemaCache.Identifiers  (QualifiedIdentifier (..),
@@ -59,7 +59,7 @@ class (ErrorBody a, JSON.ToJSON a) => PgrstError a where
 
   errorResponseFor :: a -> Response
   errorResponseFor err =
-    let baseHeader = MediaType.toContentType MTApplicationJSON in
+    let baseHeader = MediaType.toContentType mTApplicationJSON in
     responseLBS (status err) (baseHeader : headers err) $ errorPayload err
 
 class ErrorBody a where
@@ -264,7 +264,7 @@ instance ErrorBody SchemaCacheError where
   message (AmbiguousRelBetween parent child _) = "Could not embed because more than one relationship was found for '" <> parent <> "' and '" <> child <> "'"
   message (NoRpc schema procName argumentKeys contentType isInvPost _ _) = "Could not find the function " <> func <> (if onlySingleParams then "" else fmtPrms prmsMsg) <> " in the schema cache"
       where
-        onlySingleParams = isInvPost && contentType `elem` [MTTextPlain, MTTextXML, MTOctetStream]
+        onlySingleParams = isInvPost && contentType `elem` [mTTextPlain, mTTextXML, mTOctetStream]
         func = schema <> "." <> procName
         prms = T.intercalate ", " argumentKeys
         prmsMsg = "(" <> prms <> ")"
@@ -278,10 +278,10 @@ instance ErrorBody SchemaCacheError where
   details (NoRpc schema procName argumentKeys contentType isInvPost _ _) =
       Just $ JSON.String $ "Searched for the function " <> func <>
         (case (isInvPost, contentType) of
-           (True, MTTextPlain)       -> " with a single unnamed text parameter"
-           (True, MTTextXML)         -> " with a single unnamed xml parameter"
-           (True, MTOctetStream)     -> " with a single unnamed bytea parameter"
-           (True, MTApplicationJSON) -> fmtPrms prmsDet <> " or with a single unnamed json/jsonb parameter"
+           (True, mTTextPlain)       -> " with a single unnamed text parameter"
+           (True, mTTextXML)         -> " with a single unnamed xml parameter"
+           (True, mTOctetStream)     -> " with a single unnamed bytea parameter"
+           (True, mTApplicationJSON) -> fmtPrms prmsDet <> " or with a single unnamed json/jsonb parameter"
            _                         -> fmtPrms prmsDet
         ) <> ", but no matches were found in the schema cache."
       where
@@ -300,7 +300,7 @@ instance ErrorBody SchemaCacheError where
       then Nothing
       else JSON.String <$> noRpcHint schema procName argumentKeys allProcs overloadedProcs
       where
-        onlySingleParams = isInvPost && contentType `elem` [MTTextPlain, MTTextXML, MTOctetStream]
+        onlySingleParams = isInvPost && contentType `elem` [mTTextPlain, mTTextXML, mTOctetStream]
   hint (AmbiguousRpc _)      = Just "Try renaming the parameters or the function itself in the database so function overloading can be resolved"
   hint (TableNotFound schemaName relName tbls) = JSON.String <$> tableNotFoundHint schemaName relName tbls
 
