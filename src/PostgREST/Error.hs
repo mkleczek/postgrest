@@ -633,7 +633,7 @@ pgErrorStatus authed (SQL.SessionUsageError (SQL.QueryError _ _ (SQL.ResultError
 data Error
   = ApiRequestError ApiRequestError
   | SchemaCacheErr SchemaCacheError
-  | JwtErr JwtError
+  | JwtErr (NonEmpty JwtError)
   | NoSchemaCacheError
   | PgErr PgError
   deriving Show
@@ -697,6 +697,16 @@ instance PgrstError JwtError where
   headers JwtTokenRequired   = [requiredTokenHeader]
   headers (JwtClaimsError m) = [invalidTokenHeader m]
   headers _                  = mempty
+
+instance ErrorBody e => ErrorBody (NonEmpty e) where
+  code (e :| _) = code e
+  message (e :| _) = message e
+  details (e :| _) = details e
+  hint (e :| _) = hint e
+instance PgrstError e => PgrstError (NonEmpty e) where
+  status (e :| _) = status e
+  headers (e :| _) = headers e
+
 
 instance JSON.ToJSON JwtError where
   toJSON err = toJsonPgrstError

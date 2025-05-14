@@ -10,27 +10,27 @@ Authentication should always be implemented in an external service.
 In the test suite there is an example of simple login function that can be used for a
 very simple authentication system inside the PostgreSQL database.
 -}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE ImpredicativeTypes #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveGeneric         #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE ImpredicativeTypes    #-}
+{-# LANGUAGE NamedFieldPuns        #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 
 module PostgREST.Auth.Jwt
   ( parseAndDecodeClaims
   , parseClaims) where
 
-import qualified Data.Aeson                      as JSON
-import qualified Data.Aeson.Key                  as K
-import qualified Data.Aeson.KeyMap               as KM
-import qualified Data.ByteString                 as BS
-import qualified Data.ByteString.Internal        as BS
-import qualified Data.ByteString.Lazy.Char8      as LBS
-import qualified Data.Scientific                 as Sci
-import qualified Data.Text                       as T
-import qualified Data.Vector                     as V
-import qualified Jose.Jwk                        as JWT
-import qualified Jose.Jwt                        as JWT
+import qualified Data.Aeson                 as JSON
+import qualified Data.Aeson.Key             as K
+import qualified Data.Aeson.KeyMap          as KM
+import qualified Data.ByteString            as BS
+import qualified Data.ByteString.Internal   as BS
+import qualified Data.ByteString.Lazy.Char8 as LBS
+import qualified Data.Scientific            as Sci
+import qualified Data.Text                  as T
+import qualified Data.Vector                as V
+import qualified Jose.Jwk                   as JWT
+import qualified Jose.Jwt                   as JWT
 
 import Control.Monad.Except    (liftEither)
 import Data.Either.Combinators (mapLeft)
@@ -38,86 +38,87 @@ import Data.Text               ()
 import Data.Time.Clock         (UTCTime, nominalDiffTimeToSeconds)
 import Data.Time.Clock.POSIX   (utcTimeToPOSIXSeconds)
 
-import PostgREST.Auth.Types    (AuthResult (..))
-import PostgREST.Config        (AppConfig (..), FilterExp (..),
-                                JSPath, JSPathExp (..))
-import PostgREST.Error         (Error (..), JwtError (..))
+import PostgREST.Auth.Types (AuthResult (..))
+import PostgREST.Config     (AppConfig (..), FilterExp (..), JSPath,
+                             JSPathExp (..))
+import PostgREST.Error      (Error (..), JwtError (..))
 
-import Protolude hiding (first)
-import Jose.Jwk (JwkSet)
+import Data.Aeson       ((.:?))
+import Data.Aeson.Key   (toString)
 import Data.Aeson.Types (parseMaybe)
-import Data.Aeson ((.:?))
-import Data.Aeson.Key (toString)
+import Jose.Jwk         (JwkSet)
+import Protolude        hiding (first)
 
 parseAndDecodeClaims :: JwkSet -> ByteString -> ExceptT Error IO JSON.Object
 parseAndDecodeClaims jwkSet token = parseToken jwkSet token >>= decodeClaims
 
 decodeClaims :: MonadError Error m => JWT.JwtContent -> m JSON.Object
-decodeClaims (JWT.Jws (_, claims)) = maybe (throwError (JwtErr $ JwtClaimsError "Parsing claims failed")) pure (JSON.decodeStrict claims)
-decodeClaims _ = throwError $ JwtErr $ JwtDecodeError "Unsupported token type"
+decodeClaims (JWT.Jws (_, claims)) = maybe (throwError (JwtErr $ pure $ JwtClaimsError "Parsing claims failed")) pure (JSON.decodeStrict claims)
+decodeClaims _ = throwError $ JwtErr $ pure $ JwtDecodeError "Unsupported token type"
 
 validateClaims :: MonadError Error m => UTCTime -> Maybe Text -> JSON.Object -> m ()
-validateClaims time getConfigAud claims = liftEither $ maybeToLeft () (getAlt $ checkForErrors time getConfigAud claims)
+validateClaims time getConfigAud claims = liftEither $ maybeToLeft () (fmap JwtErr . nonEmpty $ checkForErrors time getConfigAud claims)
 
 data ValidAud = VANull | VAString Text | VAArray [Text] deriving Generic
 instance JSON.FromJSON ValidAud where
   parseJSON JSON.Null = pure VANull
   parseJSON o = JSON.genericParseJSON JSON.defaultOptions { JSON.sumEncoding = JSON.UntaggedValue } o
 
-checkForErrors :: (Monad m, forall a. Monoid (m a)) => UTCTime -> Maybe Text -> JSON.Object -> m Error
+checkForErrors :: (Monad m, forall a. Monoid (m a)) => UTCTime -> Maybe Text -> JSON.Object -> m JwtError
 checkForErrors time cfgAud = mconcat . fmap checkClaim $
-  [
-    claim "exp" parseNumberError $ inThePast "JWT expired"
-  , claim "nbf" parseNumberError $ inTheFuture "JWT not yet valid"
-  , claim "iat" parseNumberError $ inTheFuture "JWT issued at future"
-  , claim "aud" (const "The JWT 'aud' claim must be a string or an array of strings") checkAud
-  ]
+    [
+      claim "exp" parseNumberError $ inThePast "JWT expired"
+    , claim "nbf" parseNumberError $ inTheFuture "JWT not yet valid"
+    , claim "iat" parseNumberError $ inTheFuture "JWT issued at future"
+    , claim "aud" (const "The JWT 'aud' claim must be a string or an array of strings") checkAud
+    ]
   where
-      checkClaim = ((JwtErr . JwtClaimsError <$>) .)
 
-      allowedSkewSeconds = 30 :: Int64
-      sciToInt = fromMaybe 0 . Sci.toBoundedInteger
-      toSec t = floor . nominalDiffTimeToSeconds $ utcTimeToPOSIXSeconds t
-      now = toSec time
+    checkClaim = ((JwtClaimsError <$>) .)
 
-      inTheFuture = checkTime ((now + allowedSkewSeconds) <)
-      inThePast = checkTime ((now - allowedSkewSeconds) >)
+    allowedSkewSeconds = 30 :: Int64
+    sciToInt = fromMaybe 0 . Sci.toBoundedInteger
+    toSec t = floor . nominalDiffTimeToSeconds $ utcTimeToPOSIXSeconds t
+    now = toSec time
 
-      checkTime cond = checkValue (cond. sciToInt)
+    inTheFuture = checkTime ((now + allowedSkewSeconds) <)
+    inThePast = checkTime ((now - allowedSkewSeconds) >)
 
-      checkAud (VAString aud) = liftMaybe cfgAud >>= checkValue (aud /=) jwtNotInAudience
-      checkAud (VAArray auds) | (not . null) auds = liftMaybe cfgAud >>= checkValue (not . (`elem` auds)) jwtNotInAudience
-      checkAud _ = mempty
+    checkTime cond = checkValue (cond. sciToInt)
 
-      liftMaybe = maybe mempty pure
+    checkAud (VAString aud) = liftMaybe cfgAud >>= checkValue (aud /=) jwtNotInAudience
+    checkAud (VAArray auds) | (not . null) auds = liftMaybe cfgAud >>= checkValue (not . (`elem` auds)) jwtNotInAudience
+    checkAud _ = mempty
 
-      jwtNotInAudience = "JWT not in audience"
+    liftMaybe = maybe mempty pure
 
-      checkValue invalid msg val =
-        if invalid val then
-          pure msg
-        else
-          mempty
+    jwtNotInAudience = "JWT not in audience"
 
-      claim key parseError checkParsed = maybe (pure $ parseError (T.pack (toString key))) (maybe mempty checkParsed) . parseMaybe (.:? key)
+    checkValue invalid msg val =
+      if invalid val then
+        pure msg
+      else
+        mempty
 
-      parseNumberError key = mconcat ["The JWT '", key, "' claim must be a number"]
+    claim key parseError checkParsed = maybe (pure $ parseError (T.pack (toString key))) (maybe mempty checkParsed) . parseMaybe (.:? key)
+
+    parseNumberError key = mconcat ["The JWT '", key, "' claim must be a number"]
 
 -- | Receives the JWT secret and audience (from config) and a JWT and returns a
 -- JSON object of JWT claims.
 parseToken :: JwkSet -> ByteString -> ExceptT Error IO JWT.JwtContent
-parseToken _ "" = throwError . JwtErr $ JwtDecodeError "Empty JWT is sent in Authorization header"
+parseToken _ "" = throwError . JwtErr $ pure $ JwtDecodeError "Empty JWT is sent in Authorization header"
 parseToken secret tkn = do
   -- secret <- liftEither . maybeToRight (JwtErr JwtSecretMissing) $ configJWKS
   tknWith3Parts <- hasThreeParts tkn
   eitherContent <- lift $ JWT.decode (JWT.keys secret) Nothing tknWith3Parts
-  liftEither . mapLeft (JwtErr . jwtDecodeError) $ eitherContent
+  liftEither . mapLeft (JwtErr . pure . jwtDecodeError) $ eitherContent
   --liftEither $ mapLeft JwtErr $ verifyClaims content
   where
       --hasThreeParts :: ByteString -> Either Error ByteString
       hasThreeParts token = case length $ BS.split (BS.c2w '.') token of
         3 -> pure token
-        n -> throwError $ JwtErr $ JwtDecodeError ("Expected 3 parts in JWT; got " <> show n)
+        n -> throwError $ JwtErr $ pure $ JwtDecodeError ("Expected 3 parts in JWT; got " <> show n)
 
       jwtDecodeError :: JWT.JwtError -> JwtError
       -- The only errors we can get from JWT.decode function are:
@@ -134,7 +135,7 @@ parseClaims :: AppConfig -> UTCTime -> JSON.Object -> ExceptT Error IO AuthResul
 parseClaims AppConfig{configJwtAudience, configJwtRoleClaimKey, configDbAnonRole} time mclaims = do
   validateClaims time configJwtAudience mclaims
   -- role defaults to anon if not specified in jwt
-  role <- liftEither . maybeToRight (JwtErr JwtTokenRequired) $
+  role <- liftEither . maybeToRight (JwtErr $ pure JwtTokenRequired) $
     unquoted <$> walkJSPath (Just $ JSON.Object mclaims) configJwtRoleClaimKey <|> configDbAnonRole
   pure AuthResult
            { authClaims = mclaims & KM.insert "role" (JSON.toJSON $ decodeUtf8 role)
