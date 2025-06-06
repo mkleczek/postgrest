@@ -16,6 +16,7 @@ module PostgREST.Auth
   , getJwtDur
   , getRole
   , middleware
+  , decodeJwtHeader
   ) where
 
 import qualified Data.ByteString                 as BS
@@ -36,7 +37,10 @@ import PostgREST.Auth.Types    (AuthResult (..))
 import PostgREST.Config        (AppConfig (..))
 import PostgREST.Error         (Error (..))
 
-import Protolude
+import qualified Data.Aeson           as JSON
+import qualified Data.ByteString      as LBS
+import           Data.CaseInsensitive (mk)
+import           Protolude
 
 -- | Validate authorization header
 --   Parse and store JWT claims for future use in the request.
@@ -58,6 +62,17 @@ middleware appState app req respond = do
       pure $ req { Wai.vault = Wai.vault req & Vault.insert authResultKey authResult }
 
   app req' respond
+
+decodeJwtHeader :: AppState -> Wai.Middleware
+decodeJwtHeader appState app req respond = do
+  AppConfig{configCustomJwtHeader} <- getConfig appState
+  let headerName = mk $ encodeUtf8 configCustomJwtHeader
+      headers = Wai.requestHeaders req
+      replaceHeader value = (headerName, value) : filter ((/=) headerName . fst) headers
+  jwt <- runExceptT $ lookupJwtCache (getJwtCacheState appState) $ lookup headerName headers
+  let req' = either (const req) (\j -> req {Wai.requestHeaders = (replaceHeader . LBS.toStrict . JSON.encode) j}) jwt
+  app req' respond
+
 
 authResultKey :: Vault.Key (Either Error AuthResult)
 authResultKey = unsafePerformIO Vault.newKey

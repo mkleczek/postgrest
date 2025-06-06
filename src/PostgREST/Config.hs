@@ -115,6 +115,8 @@ data AppConfig = AppConfig
   , configRoleSettings             :: RoleSettings
   , configRoleIsoLvl               :: RoleIsolationLvl
   , configInternalSCSleep          :: Maybe Int32
+
+  , configCustomJwtHeader          :: Text
   }
 
 data LogLevel = LogCrit | LogError | LogWarn | LogInfo | LogDebug
@@ -306,6 +308,8 @@ parser optPath env dbSettings roleSettings roleIsolationLvl =
     <*> pure roleSettings
     <*> pure roleIsolationLvl
     <*> optInt "internal-schema-cache-sleep"
+
+    <*> (fromMaybe "Authorized-Party-Token" <$> optString "custom-jwt-header")
   where
     parseAppSettings :: C.Key -> C.Parser C.Config [(Text, Text)]
     parseAppSettings key = addFromEnv . fmap (fmap coerceText) <$> C.subassocs key C.value

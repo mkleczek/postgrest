@@ -100,6 +100,7 @@ postgrest logLevel appState connWorker =
   traceHeaderMiddleware appState .
   Cors.middleware appState .
   Auth.middleware appState .
+  Auth.decodeJwtHeader appState .
   Logger.middleware logLevel Auth.getRole $
     -- fromJust can be used, because the auth middleware will **always** add
     -- some AuthResult to the vault.
