@@ -31,7 +31,7 @@ jobs:
         run: |
           cabal_version="$(grep -oP '^version:\s*\K.*' postgrest.cabal)"
 
-          if [ "${GITHUB_REF_NAME}" != "devel" ] && [ "${GITHUB_REF_NAME}" != "v$cabal_version" ]; then
+          if [ "${GITHUB_REF_NAME}" != "devel-custom" ] && [ "${GITHUB_REF_NAME}" != "v$cabal_version" ]; then
             echo "Tagged version ($GITHUB_REF_NAME) does not match the one in postgrest.cabal (v$cabal_version). Aborting release..."
             exit 1
           fi
