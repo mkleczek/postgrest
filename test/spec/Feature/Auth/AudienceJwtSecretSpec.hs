@@ -165,7 +165,7 @@ disabledSpec :: SpecWith ((), Application)
 disabledSpec = describe "test handling of aud claims in JWT when the jwt-aud config is not set" $ do
 
   context "when the audience claim is a string" $ do
-    it "ignores the audience claim and suceeds" $ do
+    it "fails when it is not empty" $ do
       let jwtPayload =
             [json|{
               "exp": 9999999999,
@@ -175,7 +175,7 @@ disabledSpec = describe "test handling of aud claims in JWT when the jwt-aud con
             }|]
           auth = authHeaderJWT $ generateJWT jwtPayload
       request methodGet "/authors_only" [auth] ""
-        `shouldRespondWith` 200
+        `shouldRespondWith` 401
 
     it "ignores the audience claim and suceeds when it's empty" $ do
       let jwtPayload =
@@ -205,7 +205,7 @@ disabledSpec = describe "test handling of aud claims in JWT when the jwt-aud con
 
 
   context "when the audience is an array of strings" $ do
-    it "ignores the audience claim and suceeds when it has 1 element" $ do
+    it "fails it has 1 element" $ do
       let jwtPayload = [json|
             {
               "exp": 9999999999,
@@ -215,9 +215,9 @@ disabledSpec = describe "test handling of aud claims in JWT when the jwt-aud con
             }|]
           auth = authHeaderJWT $ generateJWT jwtPayload
       request methodGet "/authors_only" [auth] ""
-        `shouldRespondWith` 200
+        `shouldRespondWith` 401
 
-    it "ignores the audience claim and suceeds when it has more than 1 element" $ do
+    it "fails when it has more than 1 element" $ do
       let jwtPayload = [json|
             {
               "exp": 9999999999,
@@ -227,7 +227,7 @@ disabledSpec = describe "test handling of aud claims in JWT when the jwt-aud con
             }|]
           auth = authHeaderJWT $ generateJWT jwtPayload
       request methodGet "/authors_only" [auth] ""
-        `shouldRespondWith` 200
+        `shouldRespondWith` 401
 
     it "ignores the audience claim and suceeds when it's empty" $ do
       let jwtPayload = [json|
