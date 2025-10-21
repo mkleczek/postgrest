@@ -40,6 +40,20 @@ spec = describe "test handling of aud claims in JWT when the jwt-aud config is s
           [json|{"code":"PGRST303","details":null,"hint":null,"message":"JWT not in audience"}|]
           { matchStatus = 401 }
 
+    it "fails when the audience claim matches but is not a valid URI" $ do
+      let jwtPayload = [json|
+            {
+              "exp": 9999999999,
+              "role": "postgrest_test_author",
+              "id": "jdoe",
+              "aud": "urn:\\uriaudience"
+            }|]
+          auth = authHeaderJWT $ generateJWT jwtPayload
+      request methodGet "/authors_only" [auth] ""
+        `shouldRespondWith`
+          [json|{"code":"PGRST303","details":null,"hint":null,"message":"The JWT 'aud' claim must be a string, URI or an array of mixed strings or URIs"}|]
+          { matchStatus = 401 }
+
     it "fails when the audience claim is empty" $ do
       let jwtPayload = [json|
             {
