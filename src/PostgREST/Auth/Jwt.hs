@@ -37,12 +37,13 @@ import PostgREST.Auth.Types (AuthResult (..))
 import PostgREST.Config     (AppConfig (..), FilterExp (..), JSPath,
                              JSPathExp (..), audMatchesCfg)
 import PostgREST.Error      (Error (..),
-                             JwtClaimsError (AudClaimNotStringOrArray, ExpClaimNotNumber, IatClaimNotNumber, JWTExpired, JWTIssuedAtFuture, JWTNotInAudience, JWTNotYetValid, NbfClaimNotNumber, ParsingClaimsFailed),
+                             JwtClaimsError (AudClaimNotStringOrURIOrArray, ExpClaimNotNumber, IatClaimNotNumber, JWTExpired, JWTIssuedAtFuture, JWTNotInAudience, JWTNotYetValid, NbfClaimNotNumber, ParsingClaimsFailed),
                              JwtDecodeError (..), JwtError (..))
 
 import Data.Aeson       ((.:?))
 import Data.Aeson.Types (parseMaybe)
 import Jose.Jwk         (JwkSet)
+import Network.URI      (isURI)
 import Protolude        hiding (first)
 
 parseAndDecodeClaims :: (MonadError Error m, MonadIO m) => JwkSet -> ByteString -> m JSON.Object
@@ -55,7 +56,13 @@ decodeClaims _ = throwError $ JwtErr $ JwtDecodeErr UnsupportedTokenType
 validateClaims :: MonadError Error m => UTCTime -> (Text -> Bool) -> JSON.Object -> m ()
 validateClaims time audMatches claims = liftEither $ maybeToLeft () (fmap JwtErr . getAlt $ JwtClaimsErr <$> checkForErrors time audMatches claims)
 
-data ValidAud = VAString Text | VAArray [Text] deriving Generic
+newtype StringOrURI = StringOrURI { unStringOrURI :: Text }
+instance JSON.FromJSON StringOrURI where
+  parseJSON = fmap StringOrURI . mfilter isValidURI . JSON.parseJSON
+    where
+      isValidURI = (||) <$> not . T.isInfixOf ":" <*> isURI . T.unpack
+
+data ValidAud = VAString StringOrURI | VAArray [StringOrURI] deriving Generic
 instance JSON.FromJSON ValidAud where
   parseJSON = JSON.genericParseJSON JSON.defaultOptions { JSON.sumEncoding = JSON.UntaggedValue }
 
@@ -65,7 +72,7 @@ checkForErrors time audMatches = mconcat
     claim "exp" ExpClaimNotNumber $ inThePast JWTExpired
   , claim "nbf" NbfClaimNotNumber $ inTheFuture JWTNotYetValid
   , claim "iat" IatClaimNotNumber $ inTheFuture JWTIssuedAtFuture
-  , claim "aud" AudClaimNotStringOrArray $ checkValue (not . validAud) JWTNotInAudience
+  , claim "aud" AudClaimNotStringOrURIOrArray $ checkValue (not . validAud) JWTNotInAudience
   ]
   where
       allowedSkewSeconds = 30 :: Int64
@@ -79,8 +86,9 @@ checkForErrors time audMatches = mconcat
       checkTime cond = checkValue (cond. sciToInt)
 
       validAud = \case
-        (VAString aud) -> audMatches aud
-        (VAArray auds) -> null auds || any audMatches auds
+        (VAString aud) -> validAudString aud
+        (VAArray auds) -> null auds || any validAudString auds
+      validAudString = audMatches . unStringOrURI
 
       checkValue invalid msg val =
         if invalid val then
