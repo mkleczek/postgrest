@@ -175,6 +175,21 @@ disabledSpec = describe "test handling of aud claims in JWT when the jwt-aud con
       request methodGet "/authors_only" [auth] ""
         `shouldRespondWith` 200
 
+    it "fails when the audience claim is invalid URI" $ do
+      let jwtPayload = [json|
+            {
+              "exp": 9999999999,
+              "role": "postgrest_test_author",
+              "id": "jdoe",
+              "aud": "http://%%"
+            }|]
+          auth = authHeaderJWT $ generateJWT jwtPayload
+      request methodGet "/authors_only" [auth] ""
+        `shouldRespondWith`
+          [json|{"code":"PGRST303","details":null,"hint":null,"message":"The JWT 'aud' claim must be a string, URI or an array of mixed strings or URIs"}|]
+          { matchStatus = 401 }
+
+
   context "when the audience is an array of strings" $ do
     it "ignores the audience claim and suceeds when it has 1 element" $ do
       let jwtPayload = [json|
