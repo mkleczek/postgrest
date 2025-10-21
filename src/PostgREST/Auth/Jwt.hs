@@ -10,6 +10,7 @@ This module provides functions to deal with JWT parsing and validation (http://j
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds             #-}
+{-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
 
@@ -36,14 +37,16 @@ import Data.Time.Clock         (UTCTime, nominalDiffTimeToSeconds)
 import Data.Time.Clock.POSIX   (utcTimeToPOSIXSeconds)
 
 import PostgREST.Error (Error (..),
-                        JwtClaimsError (AudClaimNotStringOrArray, ExpClaimNotNumber, IatClaimNotNumber, JWTExpired, JWTIssuedAtFuture, JWTNotInAudience, JWTNotYetValid, NbfClaimNotNumber, ParsingClaimsFailed),
+                        JwtClaimsError (AudClaimNotStringOrURIOrArray, ExpClaimNotNumber, IatClaimNotNumber, JWTExpired, JWTIssuedAtFuture, JWTNotInAudience, JWTNotYetValid, NbfClaimNotNumber, ParsingClaimsFailed),
                         JwtDecodeError (..), JwtError (..))
 
-import Data.Aeson       ((.:?))
-import Data.Aeson.Types (parseMaybe)
-import Data.Coerce      (coerce)
-import Jose.Jwk         (JwkSet)
-import Protolude        hiding (first)
+import           Data.Aeson       ((.:?))
+import           Data.Aeson.Types (parseMaybe)
+import           Data.Coerce      (coerce)
+import qualified Data.Text        as T
+import           Jose.Jwk         (JwkSet)
+import           Network.URI      (isURI)
+import           Protolude
 
 -- A value tagged by a type-level list of validations pefrormed on it
 newtype Validated (k :: [v]) a = Validated { getValidated :: a }
@@ -79,7 +82,13 @@ decodeClaims _ = throwError $ JwtErr $ JwtDecodeErr UnsupportedTokenType
 validate :: MonadError Error m => (t -> Alt Maybe JwtClaimsError) -> t -> m (Validated k t)
 validate f claims = fmap Validated $ liftEither $ maybeToLeft claims $ fmap JwtErr . getAlt $ JwtClaimsErr <$> f claims
 
-data ValidAud = VAString Text | VAArray [Text] deriving Generic
+newtype StringOrURI = StringOrURI Text
+instance JSON.FromJSON StringOrURI where
+  parseJSON = fmap StringOrURI . mfilter isValidURI . JSON.parseJSON
+    where
+      isValidURI = (||) <$> not . T.isInfixOf ":" <*> isURI . T.unpack
+
+data ValidAud = VAString StringOrURI | VAArray [StringOrURI] deriving Generic
 instance JSON.FromJSON ValidAud where
   parseJSON = JSON.genericParseJSON JSON.defaultOptions { JSON.sumEncoding = JSON.UntaggedValue }
 
@@ -94,11 +103,11 @@ checkValue invalid msg val =
     mempty
 
 checkAud :: (Applicative f, Monoid (f JwtClaimsError)) => (Text -> Bool) -> JSON.Object -> f JwtClaimsError
-checkAud audMatches = claim "aud" AudClaimNotStringOrArray $ checkValue (not . validAud) JWTNotInAudience
+checkAud audMatches = claim "aud" AudClaimNotStringOrURIOrArray $ checkValue (not . validAud) JWTNotInAudience
   where
     validAud = \case
-      (VAString aud) -> audMatches aud
-      (VAArray auds) -> null auds || any audMatches auds
+      (VAString aud) -> audMatches $ coerce aud
+      (VAArray auds) -> null auds || any audMatches (coerce @[StringOrURI] @[Text] auds)
 
 checkExpNbfIat :: (Applicative m, Monoid (m JwtClaimsError)) => UTCTime -> JSON.Object -> m JwtClaimsError
 checkExpNbfIat time = mconcat
