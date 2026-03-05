@@ -481,6 +481,28 @@ let
         (TOXI_PROXY_NAME="$proxyname" "$_arg_command" "''${_arg_leftovers[@]}")
       '';
 
+  withToxiproxyPgProxy =
+    checkedShellScript
+      {
+        name = "postgrest-with-toxiproxy-pg-proxy";
+        docs = "Run <command> with a Toxiproxy proxy to PosgreSQL.";
+        args =
+          [
+            "ARG_POSITIONAL_SINGLE([command], [Command to run])"
+            "ARG_LEFTOVERS([command arguments])"
+            "ARG_USE_ENV([TCP_PGHOST], [], [PG host name])"
+            "ARG_USE_ENV([PGPORT], [], [PG port])"
+          ];
+        positionalCompletion = "_command";
+        workingDir = "/";
+      }
+      ''
+        proxy_port=''$(${randomPort})
+
+        ${withToxiproxyServer} ${withToxiproxyProxy} -l "$TCP_PGHOST:$proxy_port" -u "$TCP_PGHOST:$PGPORT" \
+          env "TOXI_PGPORT=$proxy_port" "$_arg_command" "''${_arg_leftovers[@]}"
+      '';
+
   withToxiproxyLatency =
     checkedShellScript
       {
@@ -567,5 +589,5 @@ buildToolbox
     builtins.map (pg: { inherit (pg) name; value = withTmpDb pg; }) postgresqlVersions
   );
   # make latest withPg available for other nix files
-  extra = { inherit withPg; };
+  extra = { inherit withPg withToxiproxyPgProxy; };
 }
