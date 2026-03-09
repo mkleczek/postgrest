@@ -1,8 +1,10 @@
 module Main where
 
-import qualified Hasql.Pool                 as P
-import qualified Hasql.Pool.Config          as P
-import qualified Hasql.Transaction.Sessions as HT
+import qualified Hasql.Connection.Setting            as SQL
+import qualified Hasql.Connection.Setting.Connection as SQL
+import qualified Hasql.Pool                          as P
+import qualified Hasql.Pool.Config                   as P
+import qualified Hasql.Transaction.Sessions          as HT
 
 import Data.Function (id)
 
@@ -37,7 +39,7 @@ main = do
     , P.acquisitionTimeout 10
     , P.agingTimeout 60
     , P.idlenessTimeout 60
-    , P.staticConnectionSettings (toUtf8 $ configDbUri testCfg)
+    , P.staticConnectionSettings (pure $ SQL.connection $ SQL.string $ configDbUri testCfg)
     -- make sure metrics are updated and pool observations published to poolChan
     , P.observationHandler $ (writeChan poolChan <> Metrics.observationMetrics metricsState) . HasqlPoolObs
     ]

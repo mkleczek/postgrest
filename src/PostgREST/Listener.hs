@@ -16,14 +16,16 @@ import           PostgREST.Version     (prettyVersion)
 import qualified PostgREST.AppState as AppState
 import qualified PostgREST.Config   as Config
 
-import           Control.Arrow              ((&&&))
-import           Data.Bitraversable         (bisequence)
-import           Data.Either.Combinators    (whenRight)
-import qualified Data.Text                  as T
-import qualified Database.PostgreSQL.LibPQ  as LibPQ
-import qualified Hasql.Session              as SQL
-import           PostgREST.Config.Database  (queryPgVersion)
-import           PostgREST.Config.PgVersion (pgvFullName)
+import           Control.Arrow                       ((&&&))
+import           Data.Bitraversable                  (bisequence)
+import           Data.Either.Combinators             (whenRight)
+import qualified Data.Text                           as T
+import qualified Database.PostgreSQL.LibPQ           as LibPQ
+import qualified Hasql.Connection.Setting            as SQL
+import qualified Hasql.Connection.Setting.Connection as SQL
+import qualified Hasql.Session                       as SQL
+import           PostgREST.Config.Database           (queryPgVersion)
+import           PostgREST.Config.PgVersion          (pgvFullName)
 import           Protolude
 
 -- | Starts the Listener in a thread
@@ -62,7 +64,7 @@ retryingListen appState = do
     -- Make sure we don't leak connections on errors
     bracket
       -- acquire connection
-      (SQL.acquire $ toUtf8 (Config.addTargetSessionAttrs $ Config.addFallbackAppName prettyVersion configDbUri))
+      (SQL.acquire $ pure $ SQL.connection $ SQL.string $ Config.addTargetSessionAttrs (Config.addFallbackAppName prettyVersion configDbUri))
       -- release connection
       (`whenRight` releaseConnection) $
       -- use connection
