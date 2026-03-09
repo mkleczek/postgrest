@@ -25,6 +25,8 @@ import qualified Hasql.Session              as SQL
 import           PostgREST.Config.Database  (queryPgVersion)
 import           PostgREST.Config.PgVersion (pgvFullName)
 import           Protolude
+import qualified Hasql.Connection.Setting as SQL
+import qualified Hasql.Connection.Setting.Connection as SQL
 
 -- | Starts the Listener in a thread
 runListener :: AppState -> IO ()
@@ -62,7 +64,7 @@ retryingListen appState = do
     -- Make sure we don't leak connections on errors
     bracket
       -- acquire connection
-      (SQL.acquire $ toUtf8 (Config.addTargetSessionAttrs $ Config.addFallbackAppName prettyVersion configDbUri))
+      (SQL.acquire $ pure $ SQL.connection $ SQL.string $ Config.addTargetSessionAttrs (Config.addFallbackAppName prettyVersion configDbUri))
       -- release connection
       (`whenRight` releaseConnection) $
       -- use connection
