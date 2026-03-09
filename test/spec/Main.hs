@@ -69,7 +69,8 @@ import qualified Feature.Query.UpdateSpec
 import qualified Feature.Query.UpsertSpec
 import qualified Feature.RollbackSpec
 import qualified Feature.RpcPreRequestGucsSpec
-
+import qualified Hasql.Connection.Setting                  as SQL
+import qualified Hasql.Connection.Setting.Connection       as SQL
 
 main :: IO ()
 main = do
@@ -78,7 +79,7 @@ main = do
     , P.acquisitionTimeout 10
     , P.agingTimeout 60
     , P.idlenessTimeout 60
-    , P.staticConnectionSettings (toUtf8 $ configDbUri testCfg)
+    , P.staticConnectionSettings (pure $ SQL.connection $ SQL.string $ configDbUri testCfg)
     ]
 
   actualPgVersion <- either (panic . show) id <$> P.use pool (queryPgVersion False)

@@ -28,20 +28,22 @@ module PostgREST.AppState
   , isPending
   ) where
 
-import qualified Data.ByteString.Char8      as BS
-import           Data.Either.Combinators    (whenLeft)
-import qualified Hasql.Pool                 as SQL
-import qualified Hasql.Pool.Config          as SQL
-import qualified Hasql.Session              as SQL
-import qualified Hasql.Transaction.Sessions as SQL
-import qualified Network.HTTP.Types.Status  as HTTP
-import qualified PostgREST.Auth.JwtCache    as JwtCache
-import qualified PostgREST.Error            as Error
-import qualified PostgREST.Logger           as Logger
-import qualified PostgREST.Metrics          as Metrics
+import qualified Data.ByteString.Char8               as BS
+import           Data.Either.Combinators             (whenLeft)
+import qualified Hasql.Connection.Setting            as SQL
+import qualified Hasql.Connection.Setting.Connection as SQL
+import qualified Hasql.Pool                          as SQL
+import qualified Hasql.Pool.Config                   as SQL
+import qualified Hasql.Session                       as SQL
+import qualified Hasql.Transaction.Sessions          as SQL
+import qualified Network.HTTP.Types.Status           as HTTP
+import qualified PostgREST.Auth.JwtCache             as JwtCache
+import qualified PostgREST.Error                     as Error
+import qualified PostgREST.Logger                    as Logger
+import qualified PostgREST.Metrics                   as Metrics
 import           PostgREST.Observation
-import           PostgREST.TimeIt           (timeItT)
-import           PostgREST.Version          (prettyVersion)
+import           PostgREST.TimeIt                    (timeItT)
+import           PostgREST.Version                   (prettyVersion)
 
 import Control.AutoUpdate (defaultUpdateSettings, mkAutoUpdate,
                            updateAction)
@@ -156,7 +158,7 @@ initPool AppConfig{..} observer = do
     , SQL.acquisitionTimeout $ fromIntegral configDbPoolAcquisitionTimeout
     , SQL.agingTimeout $ fromIntegral configDbPoolMaxLifetime
     , SQL.idlenessTimeout $ fromIntegral configDbPoolMaxIdletime
-    , SQL.staticConnectionSettings (toUtf8 $ addFallbackAppName prettyVersion configDbUri)
+    , SQL.staticConnectionSettings (pure $ SQL.connection $ SQL.string $ addFallbackAppName prettyVersion configDbUri)
     , SQL.observationHandler $ observer . HasqlPoolObs
     ]
 
@@ -213,6 +215,7 @@ usePool AppState{stateObserver=observer, stateMainThreadId=mainThreadId, ..} ses
     err@(SQL.SessionUsageError (SQL.QueryError _ _ (SQL.ClientError _))) ->
       -- An error on the client-side, usually indicates problems with connection
         observer $ QueryErrorCodeHighObs err
+    (SQL.SessionUsageError (SQL.PipelineError _)) -> pure () -- FIXME FIXME FIXME
     )
 
   return res
@@ -341,7 +344,7 @@ retryingSchemaCacheLoad appState@AppState{stateObserver=observer, stateMainThrea
     qSchemaCache = do
       conf@AppConfig{..} <- getConfig appState
       (resultTime, result) <-
-        let transaction = if configDbPreparedStatements then SQL.transaction else SQL.unpreparedTransaction in
+        let transaction = SQL.transaction in
         timeItT $ usePool appState (transaction SQL.ReadCommitted SQL.Read $ querySchemaCache conf)
       case result of
         Left e -> do
