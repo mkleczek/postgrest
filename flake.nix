@@ -2,7 +2,7 @@
   description = "REST API for any Postgres database";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-25.11-darwin";
+    nixpkgs.url = "github:nixos/nixpkgs/eb29b926343fe720ad0d285733070cb678289fca";
   };
 
   nixConfig = {
