@@ -8,7 +8,7 @@ let
     _: prev:
     rec {
       # Skip upstream Haskell test suites in this package set.
-      mkDerivation = args: prev.mkDerivation (args // { doCheck = false; });
+      # mkDerivation = args: prev.mkDerivation (args // { doCheck = false; });
 
       # To pin custom versions of Haskell packages:
       #   protolude =
