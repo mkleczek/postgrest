@@ -26,6 +26,8 @@ import System.IO.Error  (ioeGetErrorType)
 import Control.Monad.Except     (liftEither)
 import Control.Monad.Extra      (whenJust)
 import Data.Either.Combinators  (mapLeft, whenLeft)
+import Data.IORef               (atomicWriteIORef, newIORef,
+                                 readIORef)
 import Data.String              (IsString (..))
 import Network.Wai.Handler.Warp (defaultSettings, setHost,
                                  setOnException, setPort,
@@ -68,7 +70,7 @@ import qualified Data.List                 as L
 import           Data.Streaming.Network    (bindPortTCP)
 import qualified Data.Text                 as T
 import qualified Network.HTTP.Types        as HTTP
-import qualified Network.HTTP.Types.Header as HTTP (hVary)
+import qualified Network.HTTP.Types.Header as HTTP
 import qualified Network.Socket            as NS
 import           PostgREST.Unix            (createAndBindDomainSocket)
 import           Protolude                 hiding (Handler)
@@ -77,22 +79,30 @@ run :: AppState -> IO ()
 run appState = do
   conf <- AppState.getConfig appState
 
-  AppState.schemaCacheLoader appState -- Loads the initial SchemaCache
-  (mainSocket, adminSocket) <- initSockets conf
+  mainSocketRef <- newIORef Nothing
+  adminSocket <- initAdminServerSocket conf
+
   let closeSockets = do
         whenJust adminSocket NS.close
-        NS.close mainSocket
+        readIORef mainSocketRef >>= foldMap NS.close
   Unix.installSignalHandlers observer closeSockets (AppState.schemaCacheLoader appState) (AppState.readInDbConfig False appState)
+
+  Admin.runAdmin appState adminSocket (readIORef mainSocketRef) (serverSettings conf)
 
   Listener.runListener appState
 
-  Admin.runAdmin appState adminSocket mainSocket (serverSettings conf)
+  -- Kick off and wait for the initial SchemaCache load before creating the
+  -- main API socket.
+  AppState.schemaCacheLoader appState
+  AppState.waitForSchemaCacheInit appState
+
+  mainSocket <- initServerSocket conf
+  atomicWriteIORef mainSocketRef $ Just mainSocket
 
   let app = postgrest appState (AppState.schemaCacheLoader appState)
 
-  do
-    address <- resolveSocketToAddress mainSocket
-    observer $ AppServerAddressObs address
+  address <- resolveSocketToAddress mainSocket
+  observer $ AppServerAddressObs address
 
   Warp.runSettingsSocket (serverSettings conf & setOnException onWarpException) mainSocket app
   where
@@ -255,20 +265,16 @@ addRetryHint delay response = do
 isServiceUnavailable :: Wai.Response -> Bool
 isServiceUnavailable response = Wai.responseStatus response == HTTP.status503
 
-type AppSockets = (NS.Socket, Maybe NS.Socket)
+initServerSocket :: AppConfig -> IO NS.Socket
+initServerSocket AppConfig{..} = case configServerUnixSocket of
+  -- I'm not using `streaming-commons`' bindPath function here because it's not defined for Windows,
+  -- but we need to have runtime error if we try to use it in Windows, not compile time error
+  Just path -> createAndBindDomainSocket path configServerUnixSocketMode
+  Nothing -> bindPortTCP configServerPort (fromString $ T.unpack configServerHost)
 
-initSockets :: AppConfig -> IO AppSockets
-initSockets AppConfig{..} = do
-  sock <- case configServerUnixSocket of
-    -- I'm not using `streaming-commons`' bindPath function here because it's not defined for Windows,
-    -- but we need to have runtime error if we try to use it in Windows, not compile time error
-    Just path -> createAndBindDomainSocket path configServerUnixSocketMode
-    Nothing -> bindPortTCP configServerPort (fromString $ T.unpack configServerHost)
+initAdminServerSocket :: AppConfig -> IO (Maybe NS.Socket)
+initAdminServerSocket AppConfig{..} =
+  traverse (`bindPortTCP` adminHost) configAdminServerPort
+  where
+    adminHost = fromString $ T.unpack configAdminServerHost
 
-  adminSock <- case configAdminServerPort of
-    Just adminPort -> do
-      adminSock <- bindPortTCP adminPort (fromString $ T.unpack configAdminServerHost)
-      pure $ Just adminSock
-    Nothing -> pure Nothing
-
-  pure (sock, adminSock)
