@@ -1,0 +1,34 @@
+@startuml
+
+skinparam backgroundColor transparent
+skinparam linetype ortho
+
+skinparam node {
+  backgroundColor transparent
+  borderThickness 1
+}
+
+actor "External world" as World
+rectangle PostgREST
+
+database "PostgreSQL" {
+  node "System input" as InputNode {
+    rectangle Input as "input relations\ncommands, events,\nattempts, results"
+  }
+
+  node "Business logic" as LogicNode {
+    rectangle Views as "views\ncurrent state,\npending actions"
+  }
+
+  Input -r-> Views : derive
+}
+
+node Effectors as "effectors\nworkers, jobs,\nintegrations"
+
+World -r-> PostgREST : facts from clients
+PostgREST -r-> Input : insert facts
+Views -r-> Effectors : select work
+Effectors -r-> World : external actions
+Effectors -u-> Input : record attempts\nand results
+
+@enduml

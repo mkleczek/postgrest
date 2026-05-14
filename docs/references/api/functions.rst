@@ -6,6 +6,7 @@ Functions as RPC
 *"A single resource can be the equivalent of a database function, with the power to abstract state changes over any number of storage items"* -- `Roy T. Fielding <https://roy.gbiv.com/untangled/2008/rest-apis-must-be-hypertext-driven#comment-743>`_
 
 Functions can perform any operation allowed by PostgreSQL (read data, modify data, :ref:`raise errors <raise_error>`, and even DDL operations). Every function in the :ref:`exposed schema <schemas>` and accessible by the :ref:`active database role <roles>` is executable under the :code:`/rpc` prefix.
+For guidance on when to model a rule with tables, keys, constraints or views instead of an RPC command, see :ref:`relational_modeling`.
 
 If they return table types, functions can:
 

@@ -98,6 +98,8 @@ Declarative Programming
 
 It's easier to ask PostgreSQL to join data for you and let its query planner figure out the details than to loop through rows yourself. It's easier to assign permissions to database objects than to add guards in controllers. (This is especially true for cascading permissions in data dependencies.) It's easier to set constraints than to litter code with sanity checks.
 
+See :ref:`relational_modeling` for modeling patterns that turn business rules into keys, constraints, views and functions.
+
 Leak-proof Abstraction
 ----------------------
 

@@ -17,6 +17,8 @@ table-valued functions.
 - For views, it generates a join condition using the views' base tables foreign key columns.
 - For table-valued functions, it generates a join condition based on the foreign key columns of the returned table type.
 
+For schema design patterns that make these relationships part of the API contract, see :ref:`relational_modeling`.
+
 .. important::
 
   - Whenever foreign keys change you must do :ref:`schema_reloading` for this feature to work.
@@ -1335,5 +1337,4 @@ Spread can be used to move the columns of a join table in a :ref:`many-to-many <
        ]
      }
    ]
-
 

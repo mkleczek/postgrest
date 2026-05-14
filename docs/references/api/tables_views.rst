@@ -635,6 +635,7 @@ You can make an upsert with :code:`POST` and the :code:`Prefer: resolution=merge
 By default, upsert operates based on the primary key columns, so you must specify all of them.
 You can also choose to ignore the duplicates with :code:`Prefer: resolution=ignore-duplicates`.
 Upsert works best when the primary key is natural (e.g. ``sku``).
+See :ref:`relational_modeling` for examples of natural and composite keys that encode business identity.
 However, it can work with surrogate primary keys (e.g. ``id serial primary key``), if you also do a :ref:`bulk_insert` with :ref:`prefer_missing`:
 
 .. code-block:: bash

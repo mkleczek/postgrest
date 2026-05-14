@@ -3,6 +3,8 @@ api
 API's
 APIs
 APISIX
+approver
+approvers
 AST
 async
 aud
@@ -25,10 +27,13 @@ Cloudflare
 config
 cors
 CORS
+CQRS
 cryptographically
 CSV
+declaratively
 durations
 DDL
+DKNF
 DOM
 DSL
 DevOps
@@ -65,6 +70,7 @@ HTTPS
 HV
 Inlining
 inlined
+invariants
 Integrations
 idletime
 IDLETIME
@@ -87,6 +93,7 @@ login
 lookups
 Logins
 LIBPQ
+lifecycle
 logins
 lon
 lt
@@ -140,6 +147,7 @@ psql
 RabbitMQ
 RDS
 reallyreallyreallyreallyverysafe
+recomposition
 Redux
 refactor
 reloadable
@@ -157,6 +165,7 @@ schema's
 SHA
 signup
 SIGUSR
+SKU
 sl
 SQL
 sql
@@ -165,6 +174,8 @@ sr
 SSL
 stateful
 stdout
+subtype
+Subtypes
 supervisees
 SvelteKit
 systemd
@@ -181,6 +192,7 @@ unikernel
 unix
 updatable
 unfulfillable
+unrepresentable
 unselected
 Untyped
 UPSERT
@@ -197,6 +209,7 @@ Vondra
 Vue
 webapp
 webhooks
+webhook
 websearch
 Websockets
 webuser
