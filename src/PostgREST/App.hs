@@ -141,11 +141,11 @@ postgrest appState connWorker =
       -- (Last ByteString) is a Monoid that maintains latest ByteString written using tell
       -- see https://hackage-content.haskell.org/package/base-4.22.0.0/docs/Data-Monoid.html#t:Last
       -- runWriterT has to be before runExceptT to make sure role is not lost on error
-      (response, Last authRole) <- runWriterT . handleError . runExceptT $
+      (response, Last authRole) <- (`runReaderT` appConf) . runWriterT . handleError . runExceptT $
         if configServerTimingEnabled then
-          evalStateT (postgrestResponse appState appConf maybeSchemaCache req) (mempty @[Timing])
+          evalStateT (postgrestResponse appState maybeSchemaCache req) (mempty @[Timing])
         else
-          runIdentityT $ postgrestResponse appState appConf maybeSchemaCache req
+          runIdentityT $ postgrestResponse appState maybeSchemaCache req
 
       observer $ genResponseObs authRole req response
 
@@ -186,13 +186,13 @@ instance MonadIO m => MonadTiming (StateT [Timing] m) where
   renderTimings = (foldMap (pure . serverTimingHeader) . nonEmpty) . reverse <$> get
 
 postgrestResponse
-  :: (MonadError Error m, MonadIO m, MonadWriter (Last ByteString) m, MonadTiming m)
+  :: (MonadError Error m, MonadIO m, MonadWriter (Last ByteString) m, MonadTiming m, MonadReader AppConfig m)
   => AppState.AppState
-  -> AppConfig
   -> Maybe SchemaCache
   -> Wai.Request
   -> m Wai.Response
-postgrestResponse appState conf@AppConfig{..} maybeSchemaCache req = do
+postgrestResponse appState maybeSchemaCache req = do
+  conf@AppConfig{..} <- ask
   let observer = liftIO . AppState.getObserver appState
 
   authResult@AuthResult{..} <-
