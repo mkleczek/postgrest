@@ -15,7 +15,7 @@ very simple authentication system inside the PostgreSQL database.
 {-# LANGUAGE LambdaCase       #-}
 {-# LANGUAGE NamedFieldPuns   #-}
 module PostgREST.Auth
-  ( getAuthResult )
+  ( authenticate )
   where
 
 import           Control.Monad.Error.Class
@@ -40,8 +40,8 @@ import Protolude
 
 -- | Perform authentication and authorization
 --   Parse JWT and return AuthResult
-getAuthResult :: (MonadError Error m, MonadIO m, MonadReader AppConfig m) => AppState -> Maybe ByteString -> m AuthResult
-getAuthResult appState token = do
+authenticate :: (MonadError Error m, MonadIO m, MonadReader AppConfig m) => AppState -> Maybe ByteString -> m AuthResult
+authenticate appState token = do
   cfg@AppConfig{configJwtRoleClaimKey, configDbAnonRole} <- ask
   time <- liftIO $ getTime appState
   let
@@ -62,7 +62,7 @@ getAuthResult appState token = do
         unquoted v               = LBS.toStrict $ JSON.encode v
 
   parseClaims =<< lookupJwtCache (getJwtCacheState appState) token
-{-# INLINABLE getAuthResult #-}
+{-# INLINABLE authenticate #-}
 
 data ValidAud = VAString Text | VAArray [Text] deriving Generic
 instance JSON.FromJSON ValidAud where
