@@ -2,14 +2,15 @@ module PostgREST.Admin
   ( runAdmin
   ) where
 
+import           Control.Monad.Extra       (whenJust)
 import qualified Data.Aeson                as JSON
+import           Foreign.C.Error           (Errno (..), eMFILE)
+import           GHC.IO.Exception
 import qualified Network.HTTP.Types.Status as HTTP
+import           Network.Socket            hiding (addrFamily)
+import           Network.Socket.ByteString
 import qualified Network.Wai               as Wai
 import qualified Network.Wai.Handler.Warp  as Warp
-
-import Control.Monad.Extra       (whenJust)
-import Network.Socket            hiding (addrFamily)
-import Network.Socket.ByteString
 
 import PostgREST.AppState    (AppState, getConfig)
 import PostgREST.Config      (AppConfig (..))
@@ -35,8 +36,22 @@ runAdmin appState maybeAdminSocket getSocketREST settings = do
     observer = AppState.getObserver appState
     adminServerSettings config addr=
       settings
+        & Warp.setAccept safeAccept
         & Warp.setBeforeMainLoop (observer $ AdminStartObs addr)
         & maybe identity Warp.setPort (configAdminServerPort config)
+
+    isEMFILE = (Just eMFILE ==) . fmap Errno . ioe_errno
+    safeAccept sock =
+      -- TODO use catchNoPropagate and rethrowIO once
+      -- we stop supporting GHC versions < 9.12.1
+      accept sock `catch`
+        \e ->
+          if isEMFILE e then
+            -- Keep accepting on eMFILE
+            -- TODO log observation???
+            safeAccept sock
+          else
+            throwIO e
 
     onError adminSock ex = do
       observer $ AdminServerCrashedObs ex
