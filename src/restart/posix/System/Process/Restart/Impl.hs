@@ -100,10 +100,13 @@ ready ::
   MVar () ->
   Ready
 ready replacementCfg childControl handoverLock stopAction withRequestReplacement =
-  markReadyForHandover *> (Just <$> withRequestReplacement requestReplacement)
+  markReadyForHandover *> (Just <$> withRequestReplacement requestReplacement) <* notifySystemdReady
   where
     markReadyForHandover =
       foldMap (finally <$> markChildReady <*> closeDuplexChannel) childControl
+    notifySystemdReady =
+      when (isNothing childControl) $
+        withSystemdNotifier ($ pure NotifyReady)
     markChildReady = liftA2 (*>) (`writeDuplexChannelLine` "READY") receiveCommit
     requestReplacement =
       withMVar handoverLock $ const $ runReplacementHandover replacementCfg stopAction
