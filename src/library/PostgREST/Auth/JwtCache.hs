@@ -30,7 +30,7 @@ import Protolude
 
 import Data.Aeson qualified as JSON
 
-import PostgREST.Auth.JwtKeys (JwtKeys, configJwtKeys, currentKeys, decodeWithKeys)
+import PostgREST.Auth.JwtKeys (JwtKeys, KeysManager, configJwtKeys, currentKeys, decodeWithKeys, newKeysManager)
 import PostgREST.Cache.Sieve (Discard (..))
 import PostgREST.Config (AppConfig (..))
 import PostgREST.Error (Error (..), JwtError (JwtSecretMissing))
@@ -41,7 +41,7 @@ import PostgREST.Observation
 
 import PostgREST.Cache.Sieve qualified as SC
 
-data JwtCacheState = JwtCacheState ObservationHandler (IORef JwtCache)
+data JwtCacheState = JwtCacheState KeysManager ObservationHandler (IORef JwtCache)
 
 -- |
 -- Jwt caching can have three different configurations:
@@ -64,28 +64,39 @@ decode (JwtCache _ _ c) = fmap fst . (liftIO . runExceptT . SC.cached c >=> lift
 
 -- | Reconfigure JWT caching and update JwtCacheState accordingly
 update :: JwtCacheState -> AppConfig -> IO ()
-update (JwtCacheState observationHandler jwtCacheState) config@AppConfig{configJwtCacheMaxEntries} =
+update (JwtCacheState keysManager observationHandler jwtCacheState) config@AppConfig{configJwtCacheMaxEntries} = do
+  jwtKeys <- readIORef jwtCacheState >>= cacheKeys >>= \current -> configJwtKeys keysManager observationHandler current config
   let reinitialize =
-        newJwtCache config observationHandler
+        newJwtCache jwtKeys config observationHandler
           >>= writeIORef jwtCacheState
-  in  readIORef jwtCacheState >>= \case
-        (JwtCache decodingKey maxSize _) ->
-          if isNothing (configJwtKeys config) || configJwtCacheMaxEntries <= 0 then
-            -- reinitialize if key removed or cache disabled
-            reinitialize
-          else
-            -- key or max size changed - set them and let the cache shrink itself if necessary
-            -- (cached JWTs verified with a key that is gone are verified again)
-            atomically $ traverse_ (writeTVar decodingKey) (configJwtKeys config) *> writeTVar maxSize configJwtCacheMaxEntries
-        _ -> reinitialize
+  readIORef jwtCacheState >>= \case
+    (JwtCache decodingKey maxSize _) ->
+      if isNothing jwtKeys || configJwtCacheMaxEntries <= 0 then
+        -- reinitialize if key removed or cache disabled
+        reinitialize
+      else
+        -- key or max size changed - set them and let the cache shrink itself if necessary
+        -- (cached JWTs verified with a key that is gone are verified again)
+        atomically $ traverse_ (writeTVar decodingKey) jwtKeys *> writeTVar maxSize configJwtCacheMaxEntries
+    _ -> reinitialize
 
 init :: AppConfig -> ObservationHandler -> IO JwtCacheState
-init config = fmap (<$>) JwtCacheState <*> (newJwtCache config >=> newIORef)
+init config observationHandler = do
+  keysManager <- newKeysManager
+  jwtKeys <- configJwtKeys keysManager observationHandler Nothing config
+  JwtCacheState keysManager observationHandler <$> (newJwtCache jwtKeys config observationHandler >>= newIORef)
+
+-- | The keys of the JWT cache, if any
+cacheKeys :: JwtCache -> IO (Maybe JwtKeys)
+cacheKeys = \case
+  JwtNoJwks -> pure Nothing
+  JwtNoCache jwtKeys -> pure $ Just jwtKeys
+  JwtCache jwtKeys _ _ -> Just <$> readTVarIO jwtKeys
 
 -- | Initialize JwtCacheState
-newJwtCache :: AppConfig -> ObservationHandler -> IO JwtCache
-newJwtCache config@AppConfig{configJwtCacheMaxEntries} observationHandler = do
-  maybe (pure JwtNoJwks) initCache $ configJwtKeys config
+newJwtCache :: Maybe JwtKeys -> AppConfig -> ObservationHandler -> IO JwtCache
+newJwtCache jwtKeys AppConfig{configJwtCacheMaxEntries} observationHandler = do
+  maybe (pure JwtNoJwks) initCache jwtKeys
   where
     initCache key = if configJwtCacheMaxEntries <= 0 then pure (JwtNoCache key) else createCache key configJwtCacheMaxEntries
 
@@ -109,4 +120,4 @@ newJwtCache config@AppConfig{configJwtCacheMaxEntries} observationHandler = do
         )
 
 lookupJwtCache :: (MonadError Error m, MonadIO m) => JwtCacheState -> ByteString -> m JSON.Object
-lookupJwtCache (JwtCacheState _ cacheState) k = liftIO (readIORef cacheState) >>= (`decode` k)
+lookupJwtCache (JwtCacheState _ _ cacheState) k = liftIO (readIORef cacheState) >>= (`decode` k)

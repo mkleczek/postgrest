@@ -632,6 +632,7 @@ instance ErrorBody Error where
 instance ErrorHeaders JwtError where
   status JwtDecodeErr{} = HTTP.unauthorized401
   status JwtSecretMissing = HTTP.status500
+  status JwtKeysUnavailable{} = HTTP.status503
   status JwtTokenRequired = HTTP.unauthorized401
   status JwtClaimsErr{} = HTTP.unauthorized401
 
@@ -645,8 +646,10 @@ instance ErrorBody JwtError where
   code (JwtDecodeErr _) = "PGRST301"
   code JwtTokenRequired = "PGRST302"
   code (JwtClaimsErr _) = "PGRST303"
+  code (JwtKeysUnavailable _) = "PGRST304"
 
   message JwtSecretMissing = "Server lacks JWT secret"
+  message (JwtKeysUnavailable _) = "The keys to verify the JWT could not be fetched"
   message (JwtDecodeErr e) = case e of
     EmptyAuthHeader -> "Empty JWT is sent in Authorization header"
     UnexpectedParts n -> "Expected 3 parts in JWT; got " <> show n
@@ -673,6 +676,7 @@ instance ErrorBody JwtError where
     KeyError dets -> Just $ JSON.String dets
     BadAlgorithm dets -> Just $ JSON.String dets
     _ -> Nothing
+  details (JwtKeysUnavailable reason) = Just $ JSON.String reason
   details _ = Nothing
 
   hint _ = Nothing

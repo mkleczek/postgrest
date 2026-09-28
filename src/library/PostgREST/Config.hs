@@ -58,6 +58,7 @@ import Data.Text.Encoding qualified as T
 import Jose.Jwa qualified as JWT
 import Jose.Jwk qualified as JWT
 
+import PostgREST.Auth.OidcDiscovery (discoveryUrl, isAllowedUrl)
 import PostgREST.Catalog.Identifiers (QualifiedIdentifier (..), toQi)
 import PostgREST.Config.Database (RoleIsolationLvl, RoleSettings)
 import PostgREST.Config.JSPath
@@ -107,6 +108,7 @@ data AppConfig = AppConfig
     configJWKS :: Maybe JwkSet,
     configJwtAudience :: Maybe Text,
     configJwtIssuer :: Maybe Text,
+    configJwtOidcDiscovery :: Bool,
     configJwtRoleClaimKey :: JSPath,
     configJwtSecret :: Maybe BS.ByteString,
     configJwtSecretIsBase64 :: Bool,
@@ -196,6 +198,7 @@ toText conf =
               ("db-uri", q . configDbUri),
               ("jwt-aud", q . fromMaybe mempty . configJwtAudience),
               ("jwt-iss", q . fromMaybe mempty . configJwtIssuer),
+              ("jwt-oidc-discovery", T.toLower . show . configJwtOidcDiscovery),
               ("jwt-role-claim-key", q . dumpJSPath . configJwtRoleClaimKey),
               ("jwt-secret", q . T.decodeUtf8 . showJwtSecret),
               ("jwt-secret-is-base64", T.toLower . show . configJwtSecretIsBase64),
@@ -275,7 +278,8 @@ readAppConfig dbSettings optPath prevDbUri roleSettings roleIsolationLvl = do
     decodeLoadFiles :: AppConfig -> IO (Either IOException AppConfig)
     decodeLoadFiles parsedConfig =
       try $
-        decodeJWKS
+        validateOidcDiscovery
+          =<< decodeJWKS
           =<< decodeSecret
           =<< readSecretFile
           =<< readDbUriFile prevDbUri parsedConfig
@@ -325,6 +329,7 @@ parser optPath env dbSettings roleSettings roleIsolationLvl =
     <*> pure Nothing
     <*> optStringOrURI "jwt-aud"
     <*> optStringOrURI "jwt-iss"
+    <*> (fromMaybe False <$> optBool "jwt-oidc-discovery")
     <*> parseRoleClaimKey "jwt-role-claim-key" "role-claim-key"
     <*> (fmap encodeUtf8 <$> optString "jwt-secret")
     <*> ( fromMaybe False
@@ -568,6 +573,17 @@ decodeSecret conf@AppConfig{..} =
     decodeB64 = B64.decode . encodeUtf8 . T.strip . replaceUrlChars . decodeUtf8
     replaceUrlChars = T.replace "_" "/" . T.replace "-" "+" . T.replace "." "="
 
+-- | OpenID Connect discovery needs an issuer to discover, over https (except
+-- on the local host).
+validateOidcDiscovery :: AppConfig -> IO AppConfig
+validateOidcDiscovery conf
+  | not $ configJwtOidcDiscovery conf = pure conf
+  | otherwise = case configJwtIssuer conf of
+      Nothing -> fail "jwt-oidc-discovery requires jwt-iss to be set"
+      Just issuer
+        | isAllowedUrl (discoveryUrl issuer) -> pure conf
+        | otherwise -> fail "jwt-oidc-discovery requires jwt-iss to be an https url"
+
 -- | Parse `jwt-secret` configuration option and turn into a JWKS.
 --
 -- There are three ways to specify `jwt-secret`: text secret, JSON Web Key
@@ -790,6 +806,9 @@ exampleConfigFile =
       "",
       "## Issuer the JWT iss claim must match",
       "# jwt-iss = \"https://your.identity.provider\"",
+      "",
+      "## Verify JWTs with the keys the jwt-iss issuer publishes through OpenID Connect discovery",
+      "jwt-oidc-discovery = false",
       "",
       "## Jspath to the role claim key",
       "jwt-role-claim-key = \".role\"",

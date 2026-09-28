@@ -336,6 +336,10 @@ Related to the authentication process using JWT. You can follow the :ref:`tut1` 
 |               |             | or parsing failed.                                          |
 | PGRST303      |             |                                                             |
 +---------------+-------------+-------------------------------------------------------------+
+| .. _pgrst304: | 503         | The keys to verify the JWT could not be fetched from the    |
+|               |             | issuer, see :ref:`jwt_oidc_discovery`. The details say      |
+| PGRST304      |             | why.                                                        |
++---------------+-------------+-------------------------------------------------------------+
 
 .. The Internal Errors Group X** is always at the end
 

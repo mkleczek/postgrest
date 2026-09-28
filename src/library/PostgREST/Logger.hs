@@ -117,6 +117,14 @@ observationLogger loggerState obs = do
     o@(WarpServerObs _) ->
       when (logLevel >= LogDebug) $ do
         logWithZTime $ observationMessages o
+    o@(JwtKeysFetchedObs _ _) ->
+      when (logLevel >= LogInfo) $
+        logWithZTime $
+          observationMessages o
+    o@(JwtKeysFetchFailedObs _ _) ->
+      when (logLevel >= LogError) $
+        logWithZTime $
+          observationMessages o
     o ->
       logWithZTime $ observationMessages o
 
@@ -260,6 +268,10 @@ observationMessages = \case
     pure "Looked up a JWT in JWT cache"
   JwtCacheEviction ->
     pure "Evicted entry from JWT cache"
+  JwtKeysFetchedObs issuer count ->
+    pure $ "Fetched " <> show count <> " JWT keys of issuer " <> issuer
+  JwtKeysFetchFailedObs issuer reason ->
+    pure $ "Failed fetching the JWT keys of issuer " <> issuer <> ": " <> reason
   TerminationUnixSignalObs signal ->
     pure $ "Received termination unix signal " <> signal
   WarpServerObs txt ->

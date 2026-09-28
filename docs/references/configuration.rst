@@ -687,6 +687,22 @@ jwt-iss
 
     Specifies the issuer the JWT ``iss`` claim must match. See :ref:`jwt_iss`.
 
+.. _jwt-oidc-discovery:
+
+jwt-oidc-discovery
+------------------
+
+  =============== =================================
+  **Type**        Boolean
+  **Default**     False
+  **Reloadable**  Y
+  **Environment** PGRST_JWT_OIDC_DISCOVERY
+  **In-Database** pgrst.jwt_oidc_discovery
+  =============== =================================
+
+    Verify JWTs with the keys the :ref:`jwt-iss` issuer publishes through OpenID Connect discovery, in addition to the keys of :ref:`jwt-secret`.
+    Requires :ref:`jwt-iss` to be an https url (or an http url of the local host). See :ref:`jwt_oidc_discovery`.
+
 .. _jwt-role-claim-key:
 
 jwt-role-claim-key

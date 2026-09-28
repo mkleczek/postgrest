@@ -92,6 +92,7 @@ data SchemaCacheError
 data JwtError
   = JwtDecodeErr JwtDecodeError
   | JwtSecretMissing
+  | JwtKeysUnavailable Text
   | JwtTokenRequired
   | JwtClaimsErr JwtClaimsError
   deriving (Show)

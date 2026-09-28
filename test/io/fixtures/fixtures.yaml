@@ -51,6 +51,17 @@ cli:
     use_defaultenv: true
     env:
       PGRST_JWT_ISS: 'http://%%localhorst.invalid'
+  - name: jwt-oidc-discovery without jwt-iss
+    expect: error
+    use_defaultenv: true
+    env:
+      PGRST_JWT_OIDC_DISCOVERY: 'true'
+  - name: jwt-oidc-discovery with a plain http jwt-iss
+    expect: error
+    use_defaultenv: true
+    env:
+      PGRST_JWT_ISS: 'http://auth.example.com'
+      PGRST_JWT_OIDC_DISCOVERY: 'true'
   - name: invalid log-level
     expect: error
     use_defaultenv: true
