@@ -73,6 +73,7 @@ import PostgREST.Logger qualified as Logger
 import PostgREST.Metrics qualified as Metrics
 import Unit.CacheSpec qualified
 import Unit.OidcDiscoverySpec qualified
+import Unit.RemoteKeysSpec qualified
 
 main :: IO ()
 main = do
@@ -182,6 +183,7 @@ main = do
     parallel $ describe "Feature.Query.MultipleSchemaSpec" $ Feature.Query.MultipleSchemaSpec.spec withConfigDbs
 
     parallel $ describe "Unit.OidcDiscoverySpec" Unit.OidcDiscoverySpec.spec
+    parallel $ describe "Unit.RemoteKeysSpec" Unit.RemoteKeysSpec.spec
 
     -- Note: the rollback tests can not run in parallel, because they test persistence and
     -- this results in race conditions

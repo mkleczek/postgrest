@@ -155,6 +155,7 @@ library
                       PostgREST.Auth.JwtCache
                       PostgREST.Auth.JwtKeys
                       PostgREST.Auth.OidcDiscovery
+                      PostgREST.Auth.RemoteKeys
                       PostgREST.Auth.Types
                       PostgREST.Cache.Sieve
                       PostgREST.CLI
@@ -348,6 +349,7 @@ test-suite spec
                       SpecHelper
                       Unit.CacheSpec
                       Unit.OidcDiscoverySpec
+                      Unit.RemoteKeysSpec
   build-depends:      base              >= 4.9 && < 4.22
                     , aeson             >= 2.0.3 && < 2.3
                     , aeson-qq          >= 0.8.1 && < 0.9
