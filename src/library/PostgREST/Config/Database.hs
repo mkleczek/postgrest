@@ -60,6 +60,7 @@ dbSettingsNames =
           "db_hoisted_tx_settings",
           "jwt_aud",
           "jwt_iss",
+          "jwt_oidc_discovery",
           "jwt_role_claim_key",
           "jwt_secret",
           "jwt_secret_is_base64",

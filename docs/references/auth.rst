@@ -168,6 +168,35 @@ It goes as follows:
 
 - If the JWT doesn't have a ``kid``, PostgREST  will try each key in the :ref:`jwt-secret` one by one until it finds one that works.
 
+.. _jwt_oidc_discovery:
+
+OpenID Connect Discovery
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Identity providers implementing `OpenID Connect Discovery <https://openid.net/specs/openid-connect-discovery-1_0.html>`_ publish the keys they sign tokens with.
+With :ref:`jwt-oidc-discovery`, PostgREST fetches the keys of the :ref:`jwt-iss` issuer instead of having them in :ref:`jwt-secret`:
+
+.. code-block:: ini
+
+  jwt-iss = "https://auth.example.com/realms/app"
+  jwt-oidc-discovery = true
+
+- PostgREST reads the discovery document at ``<jwt-iss>/.well-known/openid-configuration``, whose ``issuer`` must be identical to :ref:`jwt-iss`, and then the key set at its ``jwks_uri``.
+  Only public signing keys are used. Both must be served over https, except from the local host, and redirects are not followed.
+- The keys are used for the ``max-age`` of the key set response (between one minute and a day, five minutes without one) and then refreshed in the background, while requests keep using them.
+- A JWT whose ``kid`` matches none of the keys makes PostgREST fetch them right away, so a key the provider adds when it rotates its keys is used without waiting for the refresh.
+  When the keys change, the :ref:`jwt_caching` is emptied, so a JWT signed with a key the provider removed is rejected from then on.
+- At most one fetch runs at a time, and fetches start at least five seconds apart, however many requests ask for one.
+- When a fetch fails, the previous keys are kept. Until the keys could be fetched once, requests with a JWT are rejected with a :ref:`503 Service Unavailable <pgrst304>` error, unless a key of :ref:`jwt-secret` can verify the JWT.
+
+The keys of :ref:`jwt-secret`, if any, are used as well, e.g. while migrating from a secret to the provider's keys.
+Fetches and their failures are logged, see :ref:`pgrst_logging`.
+
+.. important::
+
+  Many providers sign the tokens for all their clients with the same keys, and :ref:`iss validation <jwt_iss>` can't tell those tokens apart.
+  Set :ref:`jwt-aud` to the audience of your tokens, so tokens issued for other applications are rejected.
+
 .. _jwt_claims_validation:
 
 JWT Claims Validation

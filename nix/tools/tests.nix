@@ -91,6 +91,7 @@ let
       '';
 
   ioTestPython = python3.withPackages (ps: [
+    ps.cryptography
     ps.pyjwt
     ps.pytest
     ps.pytest-xdist

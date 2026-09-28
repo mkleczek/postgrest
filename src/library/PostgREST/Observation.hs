@@ -65,6 +65,10 @@ data Observation
   | PoolFlushed
   | JwtCacheLookup Bool
   | JwtCacheEviction
+  | -- | The JWT keys of an issuer were fetched and differ from the previous ones: issuer, number of keys
+    JwtKeysFetchedObs Text Int
+  | -- | Fetching the JWT keys of an issuer failed: issuer, reason
+    JwtKeysFetchFailedObs Text Text
   | TerminationUnixSignalObs Text
   | WarpServerObs Text
   deriving (Generic)

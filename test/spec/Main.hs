@@ -19,6 +19,7 @@ import Feature.Auth.IssuerJwtSpec qualified
 import Feature.Auth.JwtCacheSpec qualified
 import Feature.Auth.NoAnonSpec qualified
 import Feature.Auth.NoJwtSecretSpec qualified
+import Feature.Auth.OidcDiscoverySpec qualified
 import Feature.ConcurrentSpec qualified
 import Feature.CorsSpec qualified
 import Feature.ExtraSearchPathSpec qualified
@@ -126,6 +127,7 @@ main = do
                 ("Feature.Auth.JwtCacheSpec", Feature.Auth.JwtCacheSpec.spec),
                 ("Feature.Auth.NoAnonSpec", Feature.Auth.NoAnonSpec.spec),
                 ("Feature.Auth.NoJwtSecretSpec", Feature.Auth.NoJwtSecretSpec.spec),
+                ("Feature.Auth.OidcDiscoverySpec", Feature.Auth.OidcDiscoverySpec.spec),
                 ("Feature.ConcurrentSpec", Feature.ConcurrentSpec.spec),
                 ("Feature.CorsSpec", Feature.CorsSpec.spec),
                 ("Feature.HttpHeaderSpec", Feature.HttpHeaderSpec.spec),

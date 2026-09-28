@@ -16,6 +16,7 @@ ALTER ROLE db_config_authenticator SET pgrst.db_schemas = 'test, tenant1, tenant
 ALTER ROLE db_config_authenticator SET pgrst.db_tx_end = 'commit-allow-override';
 ALTER ROLE db_config_authenticator SET pgrst.jwt_aud = 'https://example.org';
 ALTER ROLE db_config_authenticator SET pgrst.jwt_iss = 'https://issuer.example.org';
+ALTER ROLE db_config_authenticator SET pgrst.jwt_oidc_discovery = 'false';
 ALTER ROLE db_config_authenticator SET pgrst.jwt_cache_max_entries = '123';
 ALTER ROLE db_config_authenticator SET pgrst.jwt_role_claim_key = '$.a.role';
 ALTER ROLE db_config_authenticator SET pgrst.jwt_secret = 'REALLY=REALLY=REALLY=REALLY=VERY=SAFE';
@@ -73,6 +74,7 @@ ALTER ROLE other_authenticator SET pgrst.db_root_spec = 'other_root';
 ALTER ROLE other_authenticator SET pgrst.db_schemas = 'test, other_tenant1, other_tenant2';
 ALTER ROLE other_authenticator SET pgrst.jwt_aud = 'https://otherexample.org';
 ALTER ROLE other_authenticator SET pgrst.jwt_iss = 'https://issuer.otherexample.org';
+ALTER ROLE other_authenticator SET pgrst.jwt_oidc_discovery = 'false';
 ALTER ROLE other_authenticator SET pgrst.jwt_secret = 'ODERREALLYREALLYREALLYREALLYVERYSAFE';
 ALTER ROLE other_authenticator SET pgrst.jwt_secret_is_base64 = 'false';
 ALTER ROLE other_authenticator SET pgrst.jwt_cache_max_entries = '456';
