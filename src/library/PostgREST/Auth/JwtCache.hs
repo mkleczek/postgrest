@@ -30,7 +30,7 @@ import Protolude
 
 import Data.Aeson qualified as JSON
 
-import PostgREST.Auth.Jwt (parseAndDecodeClaims)
+import PostgREST.Auth.JwtKeys (JwtKeys, configJwtKeys, currentKeys, decodeWithKeys)
 import PostgREST.Cache.Sieve (Discard (..))
 import PostgREST.Config (AppConfig (..))
 import PostgREST.Error (Error (..), JwtError (JwtSecretMissing))
@@ -54,29 +54,29 @@ data JwtCacheState = JwtCacheState ObservationHandler (IORef JwtCache)
 -- Handling of reconfiguration is centralized in this module.
 data JwtCache
   = JwtNoJwks
-  | JwtNoCache JwkSet
-  | JwtCache (TVar JwkSet) (TVar Int) (SC.Cache (ExceptT Error IO) ByteString (JSON.Object, Maybe Jwk))
+  | JwtNoCache JwtKeys
+  | JwtCache (TVar JwtKeys) (TVar Int) (SC.Cache (ExceptT Error IO) ByteString (JSON.Object, Maybe Jwk))
 
 decode :: (MonadError Error m, MonadIO m) => JwtCache -> ByteString -> m JSON.Object
 decode JwtNoJwks = const $ throwError (JwtErr JwtSecretMissing)
-decode (JwtNoCache key) = fmap fst . parseAndDecodeClaims key
+decode (JwtNoCache key) = fmap fst . decodeWithKeys key
 decode (JwtCache _ _ c) = fmap fst . (liftIO . runExceptT . SC.cached c >=> liftEither)
 
 -- | Reconfigure JWT caching and update JwtCacheState accordingly
 update :: JwtCacheState -> AppConfig -> IO ()
-update (JwtCacheState observationHandler jwtCacheState) config@AppConfig{configJWKS, configJwtCacheMaxEntries} =
+update (JwtCacheState observationHandler jwtCacheState) config@AppConfig{configJwtCacheMaxEntries} =
   let reinitialize =
         newJwtCache config observationHandler
           >>= writeIORef jwtCacheState
   in  readIORef jwtCacheState >>= \case
         (JwtCache decodingKey maxSize _) ->
-          if isNothing configJWKS || configJwtCacheMaxEntries <= 0 then
+          if isNothing (configJwtKeys config) || configJwtCacheMaxEntries <= 0 then
             -- reinitialize if key removed or cache disabled
             reinitialize
           else
             -- key or max size changed - set them and let the cache shrink itself if necessary
             -- (cached JWTs verified with a key that is gone are verified again)
-            atomically $ traverse_ (writeTVar decodingKey) configJWKS *> writeTVar maxSize configJwtCacheMaxEntries
+            atomically $ traverse_ (writeTVar decodingKey) (configJwtKeys config) *> writeTVar maxSize configJwtCacheMaxEntries
         _ -> reinitialize
 
 init :: AppConfig -> ObservationHandler -> IO JwtCacheState
@@ -84,8 +84,8 @@ init config = fmap (<$>) JwtCacheState <*> (newJwtCache config >=> newIORef)
 
 -- | Initialize JwtCacheState
 newJwtCache :: AppConfig -> ObservationHandler -> IO JwtCache
-newJwtCache AppConfig{configJWKS, configJwtCacheMaxEntries} observationHandler = do
-  maybe (pure JwtNoJwks) initCache configJWKS
+newJwtCache config@AppConfig{configJwtCacheMaxEntries} observationHandler = do
+  maybe (pure JwtNoJwks) initCache $ configJwtKeys config
   where
     initCache key = if configJwtCacheMaxEntries <= 0 then pure (JwtNoCache key) else createCache key configJwtCacheMaxEntries
 
@@ -95,17 +95,17 @@ newJwtCache AppConfig{configJWKS, configJwtCacheMaxEntries} observationHandler =
       JwtCache keyTVar maxSizeTVar
         <$> notCachingErrors (readTVar maxSizeTVar) keyTVar
 
-    notCachingErrors :: STM Int -> TVar JwkSet -> IO (SC.Cache (ExceptT Error IO) ByteString (JSON.Object, Maybe Jwk))
+    notCachingErrors :: STM Int -> TVar JwtKeys -> IO (SC.Cache (ExceptT Error IO) ByteString (JSON.Object, Maybe Jwk))
     notCachingErrors maxSize key =
       SC.cacheIO
         ( SC.CacheConfig
             maxSize
             copy
-            (\token -> liftIO (readTVarIO key) >>= (`parseAndDecodeClaims` token))
+            (\token -> liftIO (readTVarIO key) >>= (`decodeWithKeys` token))
             (lift . observationHandler . JwtCacheLookup) -- lookup metrics
             (const . const $ lift $ observationHandler JwtCacheEviction) -- evictions metrics
             -- a JWT verified with a key that is not a current key anymore is verified again
-            (const . liftIO $ (\current (_, verifiedWith) -> pure $ if maybe False (`elem` keys current) verifiedWith then Nothing else Just (Refresh pass)) <$> readTVarIO key)
+            (const . liftIO $ (\current (_, verifiedWith) -> pure $ if maybe False (`elem` keys current) verifiedWith then Nothing else Just (Refresh pass)) <$> (readTVarIO key >>= currentKeys))
         )
 
 lookupJwtCache :: (MonadError Error m, MonadIO m) => JwtCacheState -> ByteString -> m JSON.Object

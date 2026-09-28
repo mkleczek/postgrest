@@ -153,6 +153,7 @@ library
                       PostgREST.Auth
                       PostgREST.Auth.Jwt
                       PostgREST.Auth.JwtCache
+                      PostgREST.Auth.JwtKeys
                       PostgREST.Auth.Types
                       PostgREST.Cache.Sieve
                       PostgREST.CLI
