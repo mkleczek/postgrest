@@ -8,7 +8,13 @@ let
   image = dockerTools.buildImage {
     name = "postgrest";
     tag = "latest";
-    copyToRoot = postgrest;
+    # CA certificates verify the servers PostgREST requests over HTTPS, e.g.
+    # the issuer's keys with jwt-oidc-discovery. Mounting a bundle over
+    # /etc/ssl/certs replaces them.
+    copyToRoot = [
+      postgrest
+      dockerTools.caCertificates
+    ];
 
     # Set the current time as the image creation date. This makes the build
     # non-reproducible, but that should not be an issue for us.
