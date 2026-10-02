@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file. From versio
 
 - Add schema cache query logging on `log-query=true` and `log-level=info|debug` by @steve-chavez in #5285
 - Reduce JWT cache memory usage by @mkleczek in #5229
+- Fix admin `/live` and `/metrics` waiting for a pool connection when `db-channel-enabled` is false by @mkleczek
 
 ## [16.4] - 2026-09-24
 
