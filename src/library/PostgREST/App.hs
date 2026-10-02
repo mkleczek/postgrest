@@ -58,7 +58,6 @@ import Network.Wai.Header qualified as WaiHeader
 
 import PostgREST.ApiRequest (ApiRequest (..))
 import PostgREST.AppState (AppState)
-import PostgREST.AppState.Reload (runListener)
 import PostgREST.Auth.Types (AuthResult (..))
 import PostgREST.Config (AppConfig (..))
 import PostgREST.Error (Error)
@@ -108,11 +107,9 @@ run appState mainThreadIdRef = do
 
     Admin.runAdmin appState adminSocket (checkMainAppLive (readIORef mainSocketRef) mainThreadIdRef) (serverSettings conf)
 
-    runListener appState
-
-    -- Kick off and wait for the initial SchemaCache load before creating the
-    -- main API socket.
-    AppState.schemaCacheLoader appState
+    -- Start the listener and kick off the initial SchemaCache load, and wait
+    -- for it before creating the main API socket.
+    AppState.start appState
     if configServerReusePort conf then
       AppState.waitForSchemaCacheLoaded appState
     else

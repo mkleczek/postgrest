@@ -21,6 +21,7 @@ module PostgREST.AppState
   , usePool
   , readInDbConfig
   , schemaCacheLoader
+  , start
   , getObserver
   , isLoaded
   , isPending
@@ -39,6 +40,7 @@ import PostgREST.AppState.Reload
   ( isSchemaCacheLoaded
   , readInDbConfig
   , retryingSchemaCacheLoad
+  , runListener
   , waitForSchemaCacheInit
   , waitForSchemaCacheLoaded
   )
@@ -90,6 +92,13 @@ initWithPool pool confRef loggerState metricsState observer appKiller = mdo
       <*> pure metricsState
 
   return appState
+
+-- | Start the background work of the AppState: the listener and the initial
+-- schema cache load, which runs in the background, see 'waitForSchemaCacheInit'
+start :: AppState -> IO ()
+start appState = do
+  runListener appState
+  schemaCacheLoader appState
 
 isConnEstablished :: AppState -> IO Bool
 isConnEstablished appState = do
