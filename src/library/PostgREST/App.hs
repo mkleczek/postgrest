@@ -63,7 +63,7 @@ import PostgREST.Auth.Types (AuthResult (..))
 import PostgREST.Config (AppConfig (..))
 import PostgREST.Error (Error)
 import PostgREST.Network (resolveSocketToAddress)
-import PostgREST.Observation (Observation (..))
+import PostgREST.Observation (Observation (..), ObservationHandler)
 import PostgREST.Response.Performance (Metric (..), NoTimer (..), Timer (..), newServerTimer, serverTimingHeader, timed)
 import PostgREST.SchemaCache (SchemaCache (..))
 import PostgREST.Unix (createAndBindDomainSocket)
@@ -163,7 +163,7 @@ postgrest appState =
 
         -- GHC specialises this for each Timer, so timing costs nothing when disabled
         respondWith :: (Timer t) => RequestCtx t -> IO Wai.Response
-        respondWith ctx@RequestCtx{ctxTimer} = do
+        respondWith ctx@RequestCtx{ctxTimer, ctxObserver} = do
           -- writer to save authRole (uses `tell` for this and `getLast` to obtain it)
           -- has to be before runExceptT to make sure role is not lost on error
           (response, authRole) <- runWriterT . handleError . runExceptT $ do
@@ -176,17 +176,19 @@ postgrest appState =
 
             postgrestResponse appState appConf maybeSchemaCache ctx authResult req
 
-          AppState.getObserver appState $ genResponseObs (getLast authRole) req response
+          ctxObserver $ genResponseObs (getLast authRole) req response
 
           -- the timings of the steps run so far, also on errors
           timings <- recordedTimings ctxTimer
           pure $ Wai.mapResponseHeaders (++ maybeToList (serverTimingHeader timings)) response
 
+      let observer = AppState.getObserver appState
+
       response <-
         if configServerTimingEnabled then
-          newServerTimer >>= respondWith . RequestCtx
+          newServerTimer >>= respondWith . flip RequestCtx observer
         else
-          respondWith $ RequestCtx NoTimer
+          respondWith $ RequestCtx NoTimer observer
 
       delay <- AppState.getNextDelay appState
       respond $ addRetryHint delay response
@@ -198,8 +200,10 @@ postgrest appState =
       ResponseObs user req (Wai.responseStatus resp) (WaiHeader.contentLength $ Wai.responseHeaders resp)
 
 -- | The state of a request shared by its steps
-newtype RequestCtx t = RequestCtx
-  { ctxTimer :: t
+data RequestCtx t = RequestCtx
+  { ctxTimer :: t,
+    -- | Observes what happens while serving the request
+    ctxObserver :: ObservationHandler
   }
 
 postgrestResponse
@@ -211,9 +215,7 @@ postgrestResponse
   -> AuthResult
   -> Wai.Request
   -> m Wai.Response
-postgrestResponse appState conf@AppConfig{..} maybeSchemaCache RequestCtx{ctxTimer} authResult@AuthResult{..} req = do
-  let observer = AppState.getObserver appState
-
+postgrestResponse appState conf@AppConfig{..} maybeSchemaCache RequestCtx{ctxTimer, ctxObserver = observer} authResult@AuthResult{..} req = do
   sCache <-
     case maybeSchemaCache of
       Just sCache ->
