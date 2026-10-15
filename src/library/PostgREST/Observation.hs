@@ -13,6 +13,7 @@ module PostgREST.Observation
   , ObservationHandler
   , IsObservation (..)
   , LogLine (..)
+  , withContext
   )
 where
 
@@ -87,11 +88,17 @@ data Observation
   | JwtCacheObs JwtCacheObservation
   | TerminationUnixSignalObs Text
   | WarpServerObs Text
+  | -- | An observation with fields giving its context, such as the request it's about
+    ContextObs [(Text, Text)] Observation
   deriving (Generic)
 
 data ObsFatalError = ServerAuthError | ServerPgrstBug | ServerError42P05 | ServerError08P01
 
 type ObservationHandler = Observation -> IO ()
+
+-- | Add fields to the context of the observations the handler is given
+withContext :: [(Text, Text)] -> ObservationHandler -> ObservationHandler
+withContext ctx observer = observer . ContextObs ctx
 
 -- | An observation type, giving the log level of each observation
 class IsObservation o where
@@ -104,6 +111,11 @@ class IsObservation o where
   -- | The data of the event, as the fields of a structured log line
   obsFields :: o -> JSON.Series
   obsFields = const mempty
+
+  -- | Fields giving the context of the event, such as the request it's about.
+  -- Text diagnostic lines get them as a [key=value] prefix
+  obsContext :: o -> [(Text, Text)]
+  obsContext = const mempty
 
 -- | What the logger writes for an observation
 data LogLine
@@ -154,7 +166,9 @@ instance IsObservation Observation where
     JwtCacheObs{} -> LogDebug
     TerminationUnixSignalObs{} -> LogCrit
     WarpServerObs{} -> LogDebug
+    ContextObs _ o -> obsLevel o
   obsLog = \case
+    ContextObs _ o -> obsLog o
     ResponseObs maybeRole req status contentLen -> AccessLog $ \time -> apacheFormat maybeRole time req status contentLen
     o -> DiagnosticLog $ observationMessages o
   obsEvent = \case
@@ -199,6 +213,7 @@ instance IsObservation Observation where
     JwtCacheObs JwtCacheEviction -> "jwt_cache.eviction"
     TerminationUnixSignalObs{} -> "app.termination_signal"
     WarpServerObs{} -> "server.warp"
+    ContextObs _ o -> obsEvent o
   obsFields = \case
     AppStartObs ver -> "service.version" .= T.decodeUtf8 ver
     ExitDBFatalError _ usageErr -> usageErrorFields usageErr
@@ -225,9 +240,13 @@ instance IsObservation Observation where
           foldMap (("postgrest.role" .=) . T.decodeUtf8Lenient) maybeRole
         ]
     JwtCacheObs (JwtCacheLookup hit) -> "jwt_cache.hit" .= hit
+    ContextObs _ o -> obsFields o
     _ -> mempty
     where
       usageErrorFields usageErr = "error.type" .= Error.code (Error.PgError False usageErr)
+  obsContext = \case
+    ContextObs ctx o -> ctx <> obsContext o
+    _ -> mempty
 
 -- | The log level of the observations about a response
 statusLevel :: Status -> LogLevel
@@ -371,6 +390,8 @@ observationMessages = \case
     pure $ "Warp server: " <> txt
   ResponseObs{} ->
     mempty -- Control flow never reaches here, the response is logged as an AccessLog
+  ContextObs _ o ->
+    observationMessages o
   where
     showMillis :: Double -> Text
     showMillis x = toS $ showFFloat (Just 1) x ""

@@ -56,7 +56,9 @@ init configDbPoolSize = do
 
 -- Only some observations are used as metrics
 observationMetrics :: MetricsState -> ObservationHandler
-observationMetrics = moduleObserve . metricsModule
+observationMetrics ms obs = case obs of
+  ContextObs _ o -> observationMetrics ms o
+  _ -> moduleObserve (metricsModule ms) obs
 
 -- | The current samples of the metrics
 metricsSamples :: MetricsState -> IO [SampleGroup]

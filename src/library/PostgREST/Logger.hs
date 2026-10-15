@@ -16,6 +16,7 @@ import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getCurrentT
 import Protolude
 
 import Data.Aeson qualified as JSON
+import Data.Aeson.Key qualified as K
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
@@ -44,17 +45,17 @@ observationLogger loggerState obs = do
       LogFormatText ->
         case obsLog obs of
           DiagnosticLog msgs ->
-            logWithZTime msgs
+            logWithZTime (obsContext obs) msgs
           AccessLog line -> do
             zTime <- getZonedTime
             putStr $ line (BS.pack $ formatZonedTime zTime) -- putStr prints to stdout
       LogFormatJson ->
         logJson obs
 
-logWithZTime :: [Text] -> IO ()
-logWithZTime txts = do
+logWithZTime :: [(Text, Text)] -> [Text] -> IO ()
+logWithZTime ctx txts = do
   zTime <- getZonedTime
-  let prefix = toS (formatZonedTime zTime) <> ": "
+  let prefix = toS (formatZonedTime zTime) <> ": " <> foldMap (\(k, v) -> "[" <> k <> "=" <> v <> "] ") ctx
   traverse_ (hPutStrLn stderr . (prefix <>)) txts
 
 -- | Write the observation as one JSON object on a line, to the same output as in text
@@ -72,6 +73,7 @@ logJson obs = do
             "level" .= dumpLogLevel (obsLevel obs),
             "event" .= obsEvent obs,
             "msg" .= msg,
+            foldMap (\(k, v) -> K.fromText k .= v) (obsContext obs),
             obsFields obs
           ]
   -- one write per line, so lines of concurrent requests don't mix
