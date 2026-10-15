@@ -1014,7 +1014,7 @@ server-trace-header
   **In-Database** pgrst.server_trace_header
   =============== =================================
 
-  The header name used to trace HTTP requests. See :ref:`trace_header`.
+  The header name used to trace HTTP requests. Its value is also logged with the request. See :ref:`trace_header`.
 
 .. _server-timing-enabled:
 

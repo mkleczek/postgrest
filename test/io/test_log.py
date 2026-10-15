@@ -139,7 +139,6 @@ def test_log_format_json_diagnostic_lines(defaultenv):
         assert reloaded[0]["msg"] == "Config reloaded"
 
 
-@pytest.mark.xfail(reason="the request id isn't logged yet", strict=True)
 def test_log_request_id_text(defaultenv):
     "the server-trace-header value should prefix the request's diagnostic lines"
 
@@ -175,7 +174,6 @@ def test_log_request_id_text(defaultenv):
         assert all("request_id" not in line for line in output)
 
 
-@pytest.mark.xfail(reason="the request id isn't logged yet", strict=True)
 def test_log_request_id_json(defaultenv):
     "the server-trace-header value should be a field of the request's JSON lines"
 
@@ -200,7 +198,6 @@ def test_log_request_id_json(defaultenv):
         assert all(line["request_id"] == "req-1" for line in output)
 
 
-@pytest.mark.xfail(reason="the request id isn't logged yet", strict=True)
 def test_log_request_id_database_error(defaultenv):
     "the server-trace-header value should be a field of the request's database error lines"
 

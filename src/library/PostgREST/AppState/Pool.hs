@@ -7,6 +7,7 @@ module PostgREST.AppState.Pool
   , initPool
   , flushPool
   , usePool
+  , usePoolWith
   )
 where
 
@@ -48,15 +49,23 @@ initPool cfg@AppConfig{..} observer = do
 debounceAcqTimeouts :: ObservationHandler -> IO ObservationHandler
 debounceAcqTimeouts observer = do
   observeTimeout <- makeDebouncer $ observer PoolAcqTimeoutObs *> threadDelay (5 * oneSecond)
-  pure $ \case
-    PoolAcqTimeoutObs -> observeTimeout
-    o -> observer o
+  pure $ \o -> if isAcqTimeout o then observeTimeout else observer o
   where
     oneSecond = 1_000_000
+    -- a request's too, with its context
+    isAcqTimeout = \case
+      PoolAcqTimeoutObs -> True
+      ContextObs _ o -> isAcqTimeout o
+      _ -> False
 
 -- | Run an action with a database connection.
 usePool :: AppState -> SQL.Session a -> IO (Either SQL.UsageError a)
-usePool appState@AppState{stateObserver = observer, ..} sess = do
+usePool appState = usePoolWith (stateObserver appState) appState
+
+-- | Like 'usePool', passing what happens, e.g. a database error, to the
+-- given handler, such as a request's.
+usePoolWith :: ObservationHandler -> AppState -> SQL.Session a -> IO (Either SQL.UsageError a)
+usePoolWith observer appState@AppState{..} sess = do
   observer PoolRequest
 
   res <- SQL.use statePool sess

@@ -63,7 +63,7 @@ import PostgREST.Auth.Types (AuthResult (..))
 import PostgREST.Config (AppConfig (..))
 import PostgREST.Error (Error)
 import PostgREST.Network (resolveSocketToAddress)
-import PostgREST.Observation (Observation (..), ObservationHandler)
+import PostgREST.Observation (Observation (..), ObservationHandler, withContext)
 import PostgREST.Response.Performance (Metric (..), NoTimer (..), Timer (..), newServerTimer, serverTimingHeader, timed)
 import PostgREST.SchemaCache (SchemaCache (..))
 import PostgREST.Unix (createAndBindDomainSocket)
@@ -182,7 +182,10 @@ postgrest appState =
           timings <- recordedTimings ctxTimer
           pure $ Wai.mapResponseHeaders (++ maybeToList (serverTimingHeader timings)) response
 
-      let observer = AppState.getObserver appState
+      let
+        -- the lines about the request carry its id, from the server-trace-header
+        requestId = configServerTraceHeader >>= (`L.lookup` Wai.requestHeaders req)
+        observer = maybe identity (\rid -> withContext [("request_id", T.decodeUtf8Lenient rid)]) requestId $ AppState.getObserver appState
 
       response <-
         if configServerTimingEnabled then
@@ -251,7 +254,7 @@ postgrestResponse appState conf@AppConfig{..} maybeSchemaCache RequestCtx{ctxTim
     case tx of
       MainTx.NoDbTx r -> pure r
       MainTx.DbTx dbSession -> do
-        dbRes <- liftIO $ AppState.usePool appState dbSession
+        dbRes <- liftIO $ AppState.usePoolWith observer appState dbSession
         let eitherResp = join $ mapLeft (Error.PgErr . Error.PgError (Just authRole /= configDbAnonRole)) dbRes
 
         -- TODO: we use obsQuery twice, one here and one below because in case of an error with the usePool above, the request will finish here and return an error message.

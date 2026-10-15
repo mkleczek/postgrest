@@ -20,6 +20,7 @@ module PostgREST.AppState
   , putPgVersion
   , putIsListenerOn
   , usePool
+  , usePoolWith
   , readInDbConfig
   , schemaCacheLoader
   , getObserver
@@ -37,7 +38,7 @@ import GHC.RTS.Flags (getRTSFlags)
 import Prometheus (SampleGroup)
 import Protolude
 
-import PostgREST.AppState.Pool (debounceAcqTimeouts, destroy, initPool, usePool)
+import PostgREST.AppState.Pool (debounceAcqTimeouts, destroy, initPool, usePool, usePoolWith)
 import PostgREST.AppState.Reload
   ( isSchemaCacheLoaded
   , readInDbConfig

@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file. From versio
 - Log GHC RTS flags at startup on `log-level=debug` by @steve-chavez in #5222
 - Fix idle pool connections not being released after `db-pool-max-idletime` by @mkleczek in #3902
 - Add `log-format = "json"` to write log lines as JSON objects by @mkleczek in #4831
+- Log the `server-trace-header` value with the lines about the request, as `request_id` by @mkleczek
 
 ## [16.5] - 2026-10-18
 

@@ -335,6 +335,8 @@ You can enable tracing HTTP requests by setting :ref:`server-trace-header`. Spec
   HTTP/1.1 200 OK
   X-Request-Id: 123
 
+The value is also logged with the request, as ``request_id``. With :ref:`log-format` set to ``json``, every line about the request has a ``request_id`` field. With ``text``, its diagnostic lines, such as its :ref:`SQL queries <sql_query_logs>`, start with ``[request_id=123]``; the access line keeps the Combined Log Format.
+
 Proxy-Status Header
 -------------------
 
