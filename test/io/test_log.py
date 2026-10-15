@@ -139,6 +139,33 @@ def test_log_format_json_diagnostic_lines(defaultenv):
         assert reloaded[0]["msg"] == "Config reloaded"
 
 
+@pytest.mark.xfail(reason="the error code isn't logged yet", strict=True)
+def test_log_error_code_json(defaultenv):
+    "JSON access lines of failed requests should have their error code"
+
+    env = {**defaultenv, "PGRST_LOG_FORMAT": "json", "PGRST_LOG_LEVEL": "info"}
+
+    with run(env=env) as postgrest:
+        # PostgREST's own error
+        response = postgrest.session.get("/unknown")
+        assert response.status_code == 404
+
+        # an error of the database, with its SQLSTATE
+        response = postgrest.session.get("/projects?id=eq.1")
+        assert response.status_code == 400
+
+        response = postgrest.session.get("/projects")
+        assert response.status_code == 200
+
+        output = [json.loads(line) for line in postgrest.read_stdout(nlines=3)]
+        assert len(output) == 3
+
+        notfound, dberror, ok = output
+        assert notfound["error.type"] == "PGRST205"
+        assert dberror["error.type"] == "42703"
+        assert "error.type" not in ok
+
+
 @pytest.mark.parametrize("level", ["crit", "error", "warn", "info", "debug"])
 def test_log_query(level, defaultenv):
     "log_query=true should log the SQL query according to the log_level"
