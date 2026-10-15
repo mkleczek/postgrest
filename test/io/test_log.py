@@ -139,6 +139,91 @@ def test_log_format_json_diagnostic_lines(defaultenv):
         assert reloaded[0]["msg"] == "Config reloaded"
 
 
+@pytest.mark.xfail(reason="the request id isn't logged yet", strict=True)
+def test_log_request_id_text(defaultenv):
+    "the server-trace-header value should prefix the request's diagnostic lines"
+
+    env = {
+        **defaultenv,
+        "PGRST_SERVER_TRACE_HEADER": "X-Request-Id",
+        "PGRST_LOG_LEVEL": "warn",
+        "PGRST_LOG_QUERY": "true",
+    }
+
+    with run(env=env) as postgrest:
+        # fails in the database, so its query is logged at warn
+        response = postgrest.session.get(
+            "/projects?id=eq.1", headers={"X-Request-Id": "req-1"}
+        )
+        assert response.status_code == 400
+
+        output = drain_stdout(postgrest)
+        queries = [line for line in output if "SELECT" in line]
+        assert len(queries) > 0
+        assert all("[request_id=req-1] " in line for line in queries)
+
+        # the access line keeps the Combined Log Format
+        access = [line for line in output if '"GET /projects?id=eq.1 HTTP/1.1"' in line]
+        assert len(access) == 1
+        assert "req-1" not in access[0]
+
+        response = postgrest.session.get("/projects?id=eq.1")
+        assert response.status_code == 400
+
+        output = drain_stdout(postgrest)
+        assert len(output) > 0
+        assert all("request_id" not in line for line in output)
+
+
+@pytest.mark.xfail(reason="the request id isn't logged yet", strict=True)
+def test_log_request_id_json(defaultenv):
+    "the server-trace-header value should be a field of the request's JSON lines"
+
+    env = {
+        **defaultenv,
+        "PGRST_SERVER_TRACE_HEADER": "X-Request-Id",
+        "PGRST_LOG_FORMAT": "json",
+        "PGRST_LOG_LEVEL": "warn",
+        "PGRST_LOG_QUERY": "true",
+    }
+
+    with run(env=env) as postgrest:
+        # fails in the database, so its query is logged at warn
+        response = postgrest.session.get(
+            "/projects?id=eq.1", headers={"X-Request-Id": "req-1"}
+        )
+        assert response.status_code == 400
+
+        output = [json.loads(line) for line in drain_stdout(postgrest)]
+        events = {line["event"] for line in output}
+        assert events == {"query", "response"}
+        assert all(line["request_id"] == "req-1" for line in output)
+
+
+@pytest.mark.xfail(reason="the request id isn't logged yet", strict=True)
+def test_log_request_id_database_error(defaultenv):
+    "the server-trace-header value should be a field of the request's database error lines"
+
+    env = {
+        **defaultenv,
+        "PGRST_SERVER_TRACE_HEADER": "X-Request-Id",
+        "PGRST_LOG_FORMAT": "json",
+        "PGRST_LOG_LEVEL": "error",
+    }
+
+    with run(env=env) as postgrest:
+        # times out in the database, a server error
+        response = postgrest.session.post(
+            "/rpc/one_sec_timeout", headers={"X-Request-Id": "req-1"}
+        )
+        assert response.status_code == 500
+
+        output = [json.loads(line) for line in drain_stdout(postgrest)]
+        events = {line["event"] for line in output}
+        assert events == {"query.server_error", "response"}
+        assert all(line.get("request_id") == "req-1" for line in output)
+
+
 @pytest.mark.parametrize("level", ["crit", "error", "warn", "info", "debug"])
 def test_log_query(level, defaultenv):
     "log_query=true should log the SQL query according to the log_level"
