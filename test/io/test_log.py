@@ -139,7 +139,6 @@ def test_log_format_json_diagnostic_lines(defaultenv):
         assert reloaded[0]["msg"] == "Config reloaded"
 
 
-@pytest.mark.xfail(reason="the error code isn't logged yet", strict=True)
 def test_log_error_code_json(defaultenv):
     "JSON access lines of failed requests should have their error code"
 

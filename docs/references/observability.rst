@@ -66,7 +66,7 @@ Every object has these fields:
 - ``event``: the name of the event, such as ``response`` or ``schema_cache.loaded``. It stays the same across releases, so it's the field to filter on.
 - ``msg``: the line as it is written with ``log-format = "text"``, without the time prefix of diagnostic lines.
 
-Events add their own fields, named after the `OpenTelemetry semantic conventions <https://opentelemetry.io/docs/specs/semconv/>`_ where one exists. For instance, ``error.type`` holds the error code of the events about errors, and ``duration_ms`` the time taken to query and load the :ref:`schema_cache`.
+Events add their own fields, named after the `OpenTelemetry semantic conventions <https://opentelemetry.io/docs/specs/semconv/>`_ where one exists. For instance, ``error.type`` holds the error code of the events about errors, including the access lines of failed requests (a ``PGRST`` code or the SQLSTATE of a database error), and ``duration_ms`` the time taken to query and load the :ref:`schema_cache`.
 
 .. _sql_query_logs:
 

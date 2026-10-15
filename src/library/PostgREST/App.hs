@@ -159,14 +159,14 @@ postgrest appState =
       maybeSchemaCache <- AppState.getSchemaCache appState
 
       let
-        handleError = fmap (either (Error.errorResponseFor configClientErrorVerbosity) identity)
+        handleError = either (Error.errorResponseFor configClientErrorVerbosity) identity
 
         -- GHC specialises this for each Timer, so timing costs nothing when disabled
         respondWith :: (Timer t) => RequestCtx t -> IO Wai.Response
         respondWith ctx@RequestCtx{ctxTimer} = do
           -- writer to save authRole (uses `tell` for this and `getLast` to obtain it)
           -- has to be before runExceptT to make sure role is not lost on error
-          (response, authRole) <- runWriterT . handleError . runExceptT $ do
+          (result, authRole) <- runWriterT . runExceptT $ do
             authResult@AuthResult{..} <-
               timed ctxTimer Jwt $
                 Auth.getAuthResult appState $
@@ -176,7 +176,8 @@ postgrest appState =
 
             postgrestResponse appState appConf maybeSchemaCache ctx authResult req
 
-          AppState.getObserver appState $ genResponseObs (getLast authRole) req response
+          let response = handleError result
+          AppState.getObserver appState $ genResponseObs (getLast authRole) req response (Error.code <$> leftToMaybe result)
 
           -- the timings of the steps run so far, also on errors
           timings <- recordedTimings ctxTimer
@@ -193,7 +194,7 @@ postgrest appState =
   where
     -- TODO WaiHeader.contentLength does a lookup everytime, see: https://hackage.haskell.org/package/wai-extra-3.1.17/docs/src/Network.Wai.Header.html#contentLength
     -- It might be possible to gain some perf by returning the response length from `postgrestResponse`. We calculate the length manually on Response.hs.
-    genResponseObs :: Maybe ByteString -> Wai.Request -> Wai.Response -> Observation
+    genResponseObs :: Maybe ByteString -> Wai.Request -> Wai.Response -> Maybe Text -> Observation
     genResponseObs user req resp =
       ResponseObs user req (Wai.responseStatus resp) (WaiHeader.contentLength $ Wai.responseHeaders resp)
 

@@ -80,7 +80,8 @@ data Observation
   | PoolInit Int
   | PoolAcqTimeoutObs
   | HasqlPoolObs SQL.Observation
-  | ResponseObs (Maybe ByteString) Wai.Request Status (Maybe Integer)
+  | -- | The response to a request, with the code of its error if it failed
+    ResponseObs (Maybe ByteString) Wai.Request Status (Maybe Integer) (Maybe Text)
   | PoolRequest
   | PoolRequestFullfilled
   | PoolFlushed
@@ -147,7 +148,7 @@ instance IsObservation Observation where
     PoolInit{} -> LogCrit
     PoolAcqTimeoutObs -> LogError
     HasqlPoolObs{} -> LogDebug
-    ResponseObs _ _ status _ -> statusLevel status
+    ResponseObs _ _ status _ _ -> statusLevel status
     PoolRequest -> LogDebug
     PoolRequestFullfilled -> LogDebug
     PoolFlushed -> LogDebug
@@ -155,7 +156,7 @@ instance IsObservation Observation where
     TerminationUnixSignalObs{} -> LogCrit
     WarpServerObs{} -> LogDebug
   obsLog = \case
-    ResponseObs maybeRole req status contentLen -> AccessLog $ \time -> apacheFormat maybeRole time req status contentLen
+    ResponseObs maybeRole req status contentLen _ -> AccessLog $ \time -> apacheFormat maybeRole time req status contentLen
     o -> DiagnosticLog $ observationMessages o
   obsEvent = \case
     AdminStartObs{} -> "admin_server.start"
@@ -213,7 +214,7 @@ instance IsObservation Observation where
     QueryPgVersionError usageErr -> usageErrorFields usageErr
     PoolInit poolSize -> "db.client.connection.pool.max" .= poolSize
     PoolAcqTimeoutObs -> usageErrorFields SQL.AcquisitionTimeoutUsageError
-    ResponseObs maybeRole req status contentLen ->
+    ResponseObs maybeRole req status contentLen errorCode ->
       mconcat
         [ "http.request.method" .= T.decodeUtf8Lenient (Wai.requestMethod req),
           "url.path" .= T.decodeUtf8Lenient (Wai.rawPathInfo req),
@@ -222,7 +223,8 @@ instance IsObservation Observation where
           foldMap ("http.response.body.size" .=) contentLen,
           "client.address" .= showSockAddr (Wai.remoteHost req),
           foldMap (("user_agent.original" .=) . T.decodeUtf8Lenient) (Wai.requestHeaderUserAgent req),
-          foldMap (("postgrest.role" .=) . T.decodeUtf8Lenient) maybeRole
+          foldMap (("postgrest.role" .=) . T.decodeUtf8Lenient) maybeRole,
+          foldMap ("error.type" .=) errorCode
         ]
     JwtCacheObs (JwtCacheLookup hit) -> "jwt_cache.hit" .= hit
     _ -> mempty
